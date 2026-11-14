@@ -55,7 +55,11 @@
   #btnMic.escuchando::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:7px;animation:lat 1.2s infinite}
   @keyframes lat{50%{opacity:.25}}
   #estrofaInfo{color:var(--dim);font-size:13px;padding:8px 18px 0;letter-spacing:.5px;text-transform:uppercase;display:flex;justify-content:space-between;gap:10px}
-  #estrofaInfo .tono{color:var(--acc);min-width:64px;text-align:center}
+  #estrofaInfo .izq{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  #btnNivel{padding:4px 9px;font-size:12px;border-radius:9px;letter-spacing:.3px;text-transform:none;color:var(--txt)}
+  #btnNivel.banda{border-color:#6b5729;color:var(--acc)}
+  #btnNivel.ruido{border-color:#7a3a22;color:#ff9a70}
+  #estrofaInfo .tono{color:var(--acc);min-width:64px;text-align:center;text-transform:none;letter-spacing:0}
   .tonos-barra{display:flex;align-items:center;gap:6px}
   .tonos-barra button{padding:4px 10px;font-size:14px;border-radius:9px;color:var(--acc);border-color:#4a3c1e}
   #letra{flex:1;overflow-y:auto;padding:6px 18px 18px;scroll-behavior:smooth}
@@ -137,6 +141,9 @@
       <p class="ayuda">Se abre la búsqueda en otra pestaña. Copiá la cifra completa (con los acordes) y pegala acá abajo: la app reconoce sola qué renglones son acordes, cuáles son letra y cuáles son títulos como [Intro] o [Estribillo].</p>
     </div>
     <button id="btnPegar" style="display:none">Pegar lo que copié</button>
+    <button id="btnArchivo">Cargar desde un archivo (Word, PDF o texto)</button>
+    <input type="file" id="inArchivo" accept=".docx,.pdf,.txt,.odt,.text,.md" style="display:none">
+    <p class="ayuda" id="avisoArchivo" style="display:none"></p>
     <textarea id="inLetra" placeholder="Pegá acá la letra o la cifra.&#10;&#10;Dejá una línea en blanco entre estrofa y estrofa."></textarea>
     <p class="ayuda">Si el estribillo se repite, conviene que esté escrito cada vez que se canta, así la app sabe por dónde vas.</p>
     <div class="fila">
@@ -156,7 +163,7 @@
     <button id="btnMas" aria-label="Letra más grande">A+</button>
     <button id="btnMic">Escuchar</button>
   </header>
-  <div id="estrofaInfo"><span id="infoEstrofa"></span><span class="tonos-barra" id="tonoBarra"><button id="tonoMenos" aria-label="Bajar medio tono">−½</button><span class="tono" id="infoTono"></span><button id="tonoMas" aria-label="Subir medio tono">+½</button></span></div>
+  <div id="estrofaInfo"><span class="izq"><span id="infoEstrofa"></span><button id="btnNivel" title="Sensibilidad del oído">Oído: Normal</button></span><span class="tonos-barra" id="tonoBarra"><button id="tonoMenos" aria-label="Bajar medio tono">−½</button><span class="tono" id="infoTono"></span><button id="tonoMas" aria-label="Subir medio tono">+½</button></span></div>
   <div id="retomar">El micrófono se pausó. Tocá acá para seguir escuchando.</div>
   <div id="letra"></div>
   <div id="oido"></div>
@@ -192,13 +199,27 @@ function lev(a,b){
     prev=cur; }
   return prev[n];
 }
+// Sensibilidad del oído: con banda o mucho ruido, el teléfono entiende menos palabras
+// y algunas mal; entonces se pide menos para avanzar y se toleran más deformaciones.
+const NIVELES = {
+  normal: {nombre:"Normal",      paso1:.55, paso2:.85, minInicio:2, unaPalabra:99, retomarPalabras:5, retomar:.85, laxo:false},
+  banda:  {nombre:"Con banda",   paso1:.45, paso2:.8,  minInicio:1, unaPalabra:7, retomarPalabras:4, retomar:.8,  laxo:true},
+  ruido:  {nombre:"Mucho ruido", paso1:.38, paso2:.75, minInicio:1, unaPalabra:5, retomarPalabras:4, retomar:.75, laxo:true}
+};
+let nivel = NIVELES.normal;
 function sim(a,b){
   if (a===b) return 1;
   const L=Math.min(a.length,b.length);
   if (L>=4){ const d=lev(a,b);
     if (d===1) return .85;
     if (d===2 && L>=7) return .7;
-    if (L>=5 && a.slice(0,5)===b.slice(0,5)) return .7; }
+    if (L>=5 && a.slice(0,5)===b.slice(0,5)) return .7;
+    if (nivel.laxo){
+      if (d===2 && L>=5) return .65;
+      if (L>=5 && a.slice(0,4)===b.slice(0,4)) return .6;
+    }
+  }
+  if (nivel.laxo && L===3 && a.length===b.length && lev(a,b)===1 && a[0]===b[0]) return .6;
   return 0;
 }
 function uid(){ return "c"+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
@@ -405,6 +426,7 @@ function abrirEditor(s){
   $("#inArtista").value = s ? (s.artista||"") : "";
   $("#inLetra").value = s ? s.letra : "";
   $("#edBorrar").style.display = s ? "" : "none";
+  $("#avisoArchivo").style.display = "none";
   actualizarBusqueda(); mostrar("editor");
 }
 async function guardarEditor(){
@@ -431,6 +453,181 @@ function modal(html, cb){
     m.classList.remove("on"); cb && cb(b.dataset.r); };
 }
 const modalAbierto = ()=>$("#modal").classList.contains("on");
+
+/* ---------- leer archivos: Word (.docx), PDF, texto, OpenDocument (.odt) ---------- */
+async function zipLeer(buf, nombre){
+  // Lector mínimo de ZIP (los .docx y .odt son ZIP por dentro)
+  const dv = new DataView(buf); let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 70000); i--){ if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; } }
+  if (eocd < 0) throw new Error("zip");
+  let p = dv.getUint32(eocd + 16, true); const n = dv.getUint16(eocd + 10, true);
+  const dec = new TextDecoder();
+  for (let k = 0; k < n; k++){
+    const metodo = dv.getUint16(p + 10, true), tam = dv.getUint32(p + 20, true);
+    const ln = dv.getUint16(p + 28, true), le = dv.getUint16(p + 30, true), lc = dv.getUint16(p + 32, true);
+    const off = dv.getUint32(p + 42, true);
+    const nom = dec.decode(new Uint8Array(buf, p + 46, ln));
+    if (nom === nombre){
+      const l2 = dv.getUint16(off + 26, true), e2 = dv.getUint16(off + 28, true);
+      const datos = new Uint8Array(buf, off + 30 + l2 + e2, tam);
+      if (metodo === 0) return dec.decode(datos);
+      const s = new Blob([datos]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return await new Response(s).text();
+    }
+    p += 46 + ln + le + lc;
+  }
+  throw new Error("falta " + nombre);
+}
+function textoDeXml(xml, P, T, TAB, BR, ESP){
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const lineas = [];
+  for (const par of doc.getElementsByTagName(P)){
+    let t = "";
+    const recorrer = nodo => { for (const h of nodo.childNodes){
+      if (h.nodeType === 3){ if (ESP) t += h.nodeValue; continue; }
+      if (h.nodeType !== 1) continue;
+      if (h.tagName === T) t += h.textContent;
+      else if (h.tagName === TAB) t += "    ";
+      else if (BR.includes(h.tagName)) t += "\n";
+      else if (ESP && h.tagName === ESP) t += " ".repeat(+(h.getAttribute("text:c")||1));
+      else if (h.tagName !== P) recorrer(h);
+    } };
+    recorrer(par); lineas.push(t);
+  }
+  return lineas.join("\n");
+}
+let pdfjsListo = null;
+function cargarPdfJs(){
+  if (pdfjsListo) return pdfjsListo;
+  pdfjsListo = new Promise((ok, mal)=>{
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    sc.onload = ()=>{ window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; ok(window.pdfjsLib); };
+    sc.onerror = ()=>{ pdfjsListo = null; mal(new Error("pdfjs")); };
+    document.head.appendChild(sc);
+  });
+  return pdfjsListo;
+}
+async function textoDePdf(buf){
+  const pdfjs = await cargarPdfJs();
+  const pdf = await pdfjs.getDocument({data: buf}).promise;
+  const salida = [];
+  for (let n = 1; n <= pdf.numPages; n++){
+    const pag = await pdf.getPage(n);
+    const tc = await pag.getTextContent();
+    const items = tc.items.filter(i=>i.str !== undefined && i.str.length);
+    if (!items.length) continue;
+    // ancho de una letra, para respetar la posición de los acordes sobre la letra
+    let anchos = items.filter(i=>i.str.trim().length>1 && i.width>0).map(i=>i.width/i.str.length).sort((a,b)=>a-b);
+    const ch = anchos.length ? anchos[Math.floor(anchos.length/2)] : 5;
+    const filas = [];
+    for (const it of items){
+      const x = it.transform[4], y = it.transform[5], h = Math.abs(it.transform[3]) || 10;
+      let f = filas.find(r=>Math.abs(r.y - y) < h*0.45);
+      if (!f){ f = {y, h, items:[]}; filas.push(f); }
+      f.items.push({x, s:it.str});
+    }
+    filas.sort((a,b)=>b.y - a.y);
+    const minX = Math.min(...filas.flatMap(r=>r.items.map(i=>i.x)));
+    let yAnt = null, hTip = filas.map(r=>r.h).sort((a,b)=>a-b)[Math.floor(filas.length/2)] || 10;
+    for (const r of filas){
+      if (yAnt !== null && (yAnt - r.y) > hTip * 2.1) salida.push("");
+      r.items.sort((a,b)=>a.x - b.x);
+      let linea = "";
+      for (const it of r.items){
+        const col = Math.round((it.x - minX) / ch);
+        if (col > linea.length) linea = linea.padEnd(col, " ");
+        else if (linea && !linea.endsWith(" ") && !it.s.startsWith(" ")) linea += " ";
+        linea += it.s;
+      }
+      salida.push(linea.replace(/\s+$/,""));
+      yAnt = r.y;
+    }
+    salida.push("");
+  }
+  return salida.join("\n");
+}
+async function leerArchivo(file){
+  const nombre = file.name.toLowerCase();
+  if (nombre.endsWith(".docx")){
+    const xml = await zipLeer(await file.arrayBuffer(), "word/document.xml");
+    return textoDeXml(xml, "w:p", "w:t", "w:tab", ["w:br","w:cr"]);
+  }
+  if (nombre.endsWith(".odt")){
+    const xml = await zipLeer(await file.arrayBuffer(), "content.xml");
+    return textoDeXml(xml, "text:p", "#texto", "text:tab", ["text:line-break"], "text:s").replace(/#texto/g,"");
+  }
+  if (nombre.endsWith(".pdf")) return await textoDePdf(await file.arrayBuffer());
+  return await file.text();
+}
+// "Inocente - MIm.pdf" → título "Inocente" y tono MIm; "JANGADERO _ DO - Documentos de Google.pdf" → "JANGADERO", tono DO
+function datosDeArchivo(n){
+  let t = n.replace(/\.[^.]+$/,"").replace(/\s*-\s*Documentos de Google\s*$/i,"").replace(/\s*\(\d+\)\s*$/,"").trim();
+  let tono = null;
+  const m = t.match(/^(.*?)[\s_\-|]+([A-Za-z#]{1,6})\s*$/);
+  if (m && esAcorde(m[2]) && m[1].trim()){ tono = m[2]; t = m[1]; }
+  t = t.replace(/[_]+/g," ").replace(/\s+-\s*$/,"").trim();
+  return {titulo: t, tono};
+}
+function aTitulo(t){
+  if (t !== t.toUpperCase()) return t;
+  const chicas = ["de","del","la","las","el","los","y","en","a","por","para","con","al","un","una"];
+  return t.toLowerCase().split(/\s+/).map((w,i)=> i>0 && chicas.includes(w) ? w : w.charAt(0).toUpperCase()+w.slice(1)).join(" ");
+}
+$("#btnArchivo").onclick = ()=>$("#inArchivo").click();
+$("#inArchivo").onchange = async e=>{
+  const f = e.target.files[0]; if (!f) return;
+  await cargarArchivo(f);
+  e.target.value = "";
+};
+async function cargarArchivo(f){
+  const aviso = $("#avisoArchivo"); aviso.style.display = ""; aviso.textContent = "Leyendo " + f.name + "…";
+  try{
+    let t = await leerArchivo(f);
+    // sin recortar la sangría del primer renglón (los acordes dependen de su posición)
+    t = t.replace(/\r/g,"").replace(/\n{3,}/g,"\n\n").replace(/^(\s*\n)+/,"").replace(/\s+$/,"");
+    const datos = datosDeArchivo(f.name);
+    let titulo = datos.titulo;
+    // Si el archivo empieza con el título de la canción, va al campo de título y no queda como verso.
+    const lineasT = t.split("\n"), primera = (lineasT[0]||"").trim();
+    const igual = norm(primera).join(" ") === norm(datos.titulo).join(" ");
+    const mayus = primera === primera.toUpperCase() && /[A-ZÁÉÍÓÚÑ]{3}/.test(primera) && !esLineaAcordes(primera) && primera.split(/\s+/).length <= 8;
+    // Una primera línea corta, sola y seguida de un renglón vacío suele ser el título.
+    const sola = (lineasT[1]||"").trim()==="" && !esLineaAcordes(primera) && primera.split(/\s+/).length <= 6 && lineasT.length > 4;
+    if (primera && (igual || mayus || sola)){ titulo = aTitulo(primera.replace(/\s*\(.*\)\s*$/,"") || primera); t = lineasT.slice(1).join("\n").replace(/^(\s*\n)+/,"").replace(/\s+$/,""); }
+    if (datos.tono && !/^\s*(tom|tono|tonalidad)\s*:/im.test(t)) t = "Tono: " + datos.tono + "\n" + t;
+    if (!t){ aviso.textContent = "No encontré texto en ese archivo. Si es un PDF escaneado (una foto), no se puede leer: pegá la letra a mano."; return; }
+    const ta = $("#inLetra");
+    ta.value = ta.value.trim() ? ta.value.replace(/\s+$/,"") + "\n\n" + t : t;
+    if (!$("#inTitulo").value.trim()) $("#inTitulo").value = titulo;
+    const p = parsear(ta.value), conAc = p.estrofas.some(e=>e.some(x=>x.tipo==="acordes" || (x.acordes && x.acordes.length)));
+    aviso.textContent = `Listo: ${p.estrofas.length} estrofa${p.estrofas.length===1?"":"s"}${conAc ? ", con acordes" : ""}. Revisá que esté bien y tocá Guardar. Si el archivo trae varias canciones, borrá las que no van.`;
+  }catch(err){
+    aviso.textContent = String(err.message).includes("pdfjs") ? "Para leer PDF hace falta conexión a internet la primera vez. Probá de nuevo con internet." : "No pude leer ese archivo. Probá guardarlo como Word (.docx) o copiá y pegá la letra.";
+  }
+}
+
+// Archivo o texto que llega desde el menú "Compartir" del teléfono
+async function recibirCompartido(){
+  if (!/[?&]compartido=1/.test(location.search)) return;
+  history.replaceState(null, "", location.pathname);
+  try{
+    const c = await caches.open("atril-compartido");
+    const r = await c.match("archivo"), rt = await c.match("texto");
+    abrirEditor(null);
+    if (r){
+      const nombre = decodeURIComponent(r.headers.get("X-Nombre") || "cancion.txt");
+      const blob = await r.blob();
+      await cargarArchivo(new File([blob], nombre, {type: blob.type}));
+    } else if (rt){
+      const t = (await rt.text()).trim();
+      const aviso = $("#avisoArchivo"); aviso.style.display = "";
+      if (/^https?:\/\/\S+$/.test(t)) aviso.textContent = "Me llegó un enlace, no la letra. Abrí la página, copiá la letra con los acordes y pegala acá.";
+      else { $("#inLetra").value = t; aviso.textContent = "Listo: pegué el texto compartido. Revisalo y tocá Guardar."; }
+    }
+    await c.delete("archivo"); await c.delete("texto");
+  }catch(e){}
+}
 
 /* ---------- estado del escenario ---------- */
 let cancion=null, estrofas=[], versos=[], actual=0, cancionIdx=0, tonoOrig=null;
@@ -601,8 +798,13 @@ const Oido = {
   // Reconoce el verso por sus primeras palabras, para reaccionar apenas se empieza a cantar.
   inicio(v, cola){
     const oidas = cola.filter(w=>w.length>=3).length;
-    const m = Math.min(v.clave.length, Math.max(2, oidas));
-    if (m < 2) return 0;
+    const m = Math.min(v.clave.length, Math.max(nivel.minInicio, oidas));
+    if (m < 1) return 0;
+    if (m === 1){
+      // Con una sola palabra solo vale si es larga y está bien reconocida (no un ruido suelto).
+      const w = v.clave[0]; if (w.length < nivel.unaPalabra) return 0;
+      return cola.slice(-3).some(c=>sim(w,c) >= .85) ? .9 : 0;
+    }
     return this.puntaje({clave: v.clave.slice(0, m)}, cola.slice(-(m+2)));
   },
   terminoVerso(v, todas){
@@ -627,11 +829,11 @@ const Oido = {
     }
     cola = cola.slice(-14);
     let mejor=-1, mp=0;
-    if (cola.length>=2){
+    if (cola.length >= nivel.minInicio){
       // Sigue la canción en orden: solo puede pasar al verso que viene.
       // Si se saltó uno, acepta el siguiente a ese, pero pidiendo más coincidencia.
       // Nunca busca más abajo, así un estribillo o una estrofa repetida no hace saltear partes.
-      const pasos = [[1, .55], [2, .85]];
+      const pasos = [[1, nivel.paso1], [2, nivel.paso2]];
       for (const [d, umbral] of pasos){
         const g = actual + d; if (g >= versos.length) break;
         const v = versos[g];
@@ -646,10 +848,10 @@ const Oido = {
     // Primero hacia adelante y el más cercano, así no salta a una repetición lejana.
     if (mejor < 0){
       const tail = todas.slice(Math.min(this.corte, todas.length)).slice(-16);
-      if (tail.filter(w=>w.length>=3).length >= 5){
+      if (tail.filter(w=>w.length>=3).length >= nivel.retomarPalabras){
         for (let g = actual+3; g < versos.length; g++){
           const v = versos[g]; if (v.clave.length < 3) continue;
-          if (this.puntaje(v, tail.slice(-(v.clave.length+3))) >= .85){ mejor = g; break; }
+          if (this.puntaje(v, tail.slice(-(v.clave.length+3))) >= nivel.retomar){ mejor = g; break; }
         }
         if (mejor < 0){
           // Si no aparece adelante, puede haber vuelto a cantar algo de antes (un estribillo de más).
@@ -664,7 +866,19 @@ const Oido = {
     if (mejor>=0){ actual=mejor; this.corte=todas.length; pintar(); return; }
   }
 };
-const Ajustes = { pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR") };
+const Ajustes = { pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
+function aplicarNivel(){
+  nivel = NIVELES[Ajustes.nivel] || NIVELES.normal;
+  const b = $("#btnNivel"); b.textContent = "Oído: " + nivel.nombre;
+  b.classList.toggle("banda", Ajustes.nivel==="banda"); b.classList.toggle("ruido", Ajustes.nivel==="ruido");
+}
+$("#btnNivel").onclick = e=>{
+  e.stopPropagation();
+  const orden = ["normal","banda","ruido"];
+  Ajustes.nivel = orden[(orden.indexOf(Ajustes.nivel)+1) % orden.length];
+  ls.set("atril.nivel", Ajustes.nivel); aplicarNivel();
+};
+aplicarNivel();
 
 /* ---------- micrófono ---------- */
 const Mic = {
@@ -802,7 +1016,7 @@ $("#inImportar").onchange = async e=>{
 
 /* ---------- arranque ---------- */
 pintarLista();
-Store.init().then(pintarLista);
+Store.init().then(()=>{ pintarLista(); recibirCompartido(); });
 Mic.preparar();
 })();
 </script>
