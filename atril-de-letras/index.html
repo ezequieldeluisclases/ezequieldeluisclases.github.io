@@ -120,6 +120,11 @@
       </div>
       <input type="file" id="inImportar" accept=".json,application/json" style="display:none">
     </div>
+    <div class="buscar">
+      <div class="rot">Pasale la app a un amigo</div>
+      <p class="ayuda">Le llega un enlace. Lo abre en Chrome y toca «Agregar a la pantalla principal» (o «Instalar»).</p>
+      <div class="fila"><button id="btnCompartirApp">Compartir la app</button></div>
+    </div>
     <div class="firma">Atril de letras · creado por <b>Ezequiel de Luis</b></div>
   </div>
 </section>
@@ -995,6 +1000,17 @@ if (navigator.clipboard && navigator.clipboard.readText){
     }catch(e){ modal('<p>No pude leer lo copiado. Mantené apretado el cuadro de la letra y elegí <b>Pegar</b>.</p><div class="fila"><button data-r="ok" class="pri">Entendido</button></div>'); }
   };
 }
+// Compartir la app con amigos (WhatsApp u otra)
+const URL_APP = "https://ezequieldeluisclases.github.io/atril-de-letras/";
+$("#btnCompartirApp").onclick = async ()=>{
+  const texto = "Te paso el Atril de letras: muestra la letra y los acordes y te va siguiendo mientras cantás. Abrilo en Chrome y tocá «Agregar a la pantalla principal» para instalarlo. Creado por Ezequiel de Luis.";
+  if (navigator.share){
+    try{ await navigator.share({title:"Atril de letras", text:texto, url:URL_APP}); return; }
+    catch(e){ if (e && e.name==="AbortError") return; }
+  }
+  location.href = "https://wa.me/?text=" + encodeURIComponent(texto + "\n" + URL_APP);
+};
+
 $("#btnExportar").onclick = ()=>{
   const datos = JSON.stringify({app:"atril-de-letras", version:1, fecha:new Date().toISOString(), canciones:Store.songs}, null, 1);
   const a = document.createElement("a");
