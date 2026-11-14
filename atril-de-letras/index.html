@@ -55,7 +55,9 @@
   #btnMic.escuchando::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:7px;animation:lat 1.2s infinite}
   @keyframes lat{50%{opacity:.25}}
   #estrofaInfo{color:var(--dim);font-size:13px;padding:8px 18px 0;letter-spacing:.5px;text-transform:uppercase;display:flex;justify-content:space-between;gap:10px}
-  #estrofaInfo .tono{color:var(--acc)}
+  #estrofaInfo .tono{color:var(--acc);min-width:64px;text-align:center}
+  .tonos-barra{display:flex;align-items:center;gap:6px}
+  .tonos-barra button{padding:4px 10px;font-size:14px;border-radius:9px;color:var(--acc);border-color:#4a3c1e}
   #letra{flex:1;overflow-y:auto;padding:6px 18px 18px;scroll-behavior:smooth}
   .verso{font-size:var(--fs);line-height:1.28;padding:6px 8px;margin:2px 0;border-radius:10px;color:var(--txt);transition:color .25s,background .25s}
   .verso.con-ac{line-height:1.95;white-space:pre-wrap;padding-top:.3em;padding-bottom:.05em}
@@ -154,7 +156,7 @@
     <button id="btnMas" aria-label="Letra más grande">A+</button>
     <button id="btnMic">Escuchar</button>
   </header>
-  <div id="estrofaInfo"><span id="infoEstrofa"></span><span class="tono" id="infoTono"></span></div>
+  <div id="estrofaInfo"><span id="infoEstrofa"></span><span class="tonos-barra" id="tonoBarra"><button id="tonoMenos" aria-label="Bajar medio tono">−½</button><span class="tono" id="infoTono"></span><button id="tonoMas" aria-label="Subir medio tono">+½</button></span></div>
   <div id="retomar">El micrófono se pausó. Tocá acá para seguir escuchando.</div>
   <div id="letra"></div>
   <div id="oido"></div>
@@ -434,6 +436,7 @@ const modalAbierto = ()=>$("#modal").classList.contains("on");
 let cancion=null, estrofas=[], versos=[], actual=0, cancionIdx=0, tonoOrig=null;
 function preparar(s){
   const p = parsear(s.letra); estrofas = p.estrofas; tonoOrig = p.tono; versos = [];
+  tieneAcordes = estrofas.some(e=>e.some(x=>x.tipo==="acordes" || (x.acordes && x.acordes.length)));
   estrofas.forEach((e,si)=>{
     const idxs = e.map((x,i)=>x.tipo==="verso"?i:-1).filter(i=>i>=0);
     idxs.forEach((li,k)=>{
@@ -487,10 +490,18 @@ $("#esVolver").onclick = ()=>{ Mic.parar(); try{ wake && wake.release(); }catch(
 
 function etiquetaTono(){
   const n = semis();
-  if (tonoOrig && esAcorde(tonoOrig)) return n ? `Tono: ${transponer(tonoOrig, n)} (original ${transponer(tonoOrig,0)})` : `Tono: ${transponer(tonoOrig,0)}`;
-  return n ? `Transportado ${n>0?"+":""}${n}` : "";
+  if (tonoOrig && esAcorde(tonoOrig)) return n ? `Tono ${transponer(tonoOrig, n)} (orig. ${transponer(tonoOrig,0)})` : `Tono ${transponer(tonoOrig,0)}`;
+  return n ? `${n>0?"+":""}${n} semitono${Math.abs(n)===1?"":"s"}` : "";
 }
-let armado = "";
+let armado = "", tieneAcordes = false;
+// Subir o bajar el tono de a semitono (queda guardado en la canción)
+function cambiarTono(d){
+  if (!cancion) return;
+  cancion.tono = (((semis() + d) % 12) + 18) % 12 - 6;
+  pintar(true); Store.guardar(cancion);
+}
+$("#tonoMenos").onclick = e=>{ e.stopPropagation(); cambiarTono(-1); };
+$("#tonoMas").onclick = e=>{ e.stopPropagation(); cambiarTono(1); };
 // Arma la canción entera, una estrofa debajo de la otra. Se rearma solo al cambiar de canción o de tono.
 function armarLetra(){
   const n = semis();
@@ -504,7 +515,8 @@ function armarLetra(){
 }
 const ADELANTE = 2;   // cuántos versos que vienen quedan resaltados
 function pintar(saltar){
-  $("#infoTono").textContent = etiquetaTono();
+  $("#infoTono").textContent = etiquetaTono() || "Tono original";
+  $("#tonoBarra").style.display = tieneAcordes ? "" : "none";
   if (armado !== (cancion && cancion.id) + ":" + semis()) { armarLetra(); saltar = true; }
   if (!versos.length){ $("#infoEstrofa").textContent = ""; $("#sigue").style.display = "none"; return; }
   const fin = actual >= versos.length-1;
@@ -627,6 +639,25 @@ const Oido = {
         // Para saltear un verso hace falta oír el verso entero, no solo el comienzo.
         const p = d === 1 ? Math.max(completo, this.inicio(v, cola) - .05) : (v.clave.length >= 2 ? completo : 0);
         if (p >= umbral){ mejor = g; mp = p; break; }
+      }
+    }
+    // Retomar: si ya se escucharon varias palabras que no son el verso que sigue
+    // (habló, cantó otro, cambió la letra), busca dónde se retomó la canción.
+    // Primero hacia adelante y el más cercano, así no salta a una repetición lejana.
+    if (mejor < 0){
+      const tail = todas.slice(Math.min(this.corte, todas.length)).slice(-16);
+      if (tail.filter(w=>w.length>=3).length >= 5){
+        for (let g = actual+3; g < versos.length; g++){
+          const v = versos[g]; if (v.clave.length < 3) continue;
+          if (this.puntaje(v, tail.slice(-(v.clave.length+3))) >= .85){ mejor = g; break; }
+        }
+        if (mejor < 0){
+          // Si no aparece adelante, puede haber vuelto a cantar algo de antes (un estribillo de más).
+          for (let g = actual; g >= 0; g--){
+            const v = versos[g]; if (v.clave.length < 4) continue;
+            if (this.puntaje(v, tail.slice(-(v.clave.length+2))) >= .9){ mejor = g; break; }
+          }
+        }
       }
     }
     // Las palabras ya usadas (incluidas las provisorias) no cuentan para el verso siguiente.
