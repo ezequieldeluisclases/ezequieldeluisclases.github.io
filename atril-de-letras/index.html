@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Atril de letras</title>
+<meta name="author" content="Ezequiel de Luis">
+<meta name="theme-color" content="#0e0d0b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icono-192.png">
+<link rel="apple-touch-icon" href="icono-192.png">
+<style>
+  :root{
+    --bg:#0e0d0b; --panel:#1a1815; --line:#2b2823; --txt:#f3efe6; --dim:#7d766a; --done:#57514a;
+    --acc:#f2b33d; --acc2:#e0603a; --ok:#6cc08b; --fs:30px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+  button,a.btn{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;cursor:pointer;text-decoration:none;text-align:center}
+  button.pri{background:var(--acc);color:#1b1407;border-color:var(--acc);font-weight:700}
+  button.peligro{color:#ff8a70;border-color:#5a2a20}
+  input,textarea,select{font:inherit;color:var(--txt);background:#141310;border:1px solid var(--line);border-radius:12px;padding:12px;width:100%}
+  textarea{min-height:48vh;line-height:1.4;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;white-space:pre;overflow-x:auto}
+  .vista{display:none;min-height:100%}
+  .vista.on{display:flex;flex-direction:column}
+  header.barra{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  header.barra h1{font-size:20px;margin:0;flex:1;letter-spacing:.3px}
+  .cont{padding:16px;display:flex;flex-direction:column;gap:12px;max-width:760px;width:100%;margin:0 auto}
+  .cancion{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+  .cancion .t{flex:1;font-size:18px;font-weight:600;min-width:0}
+  .cancion .s{color:var(--dim);font-size:13px;font-weight:400;display:block;margin-top:2px}
+  .cancion button{padding:10px 12px}
+  .vacio{color:var(--dim);text-align:center;padding:40px 10px;line-height:1.5}
+  .ayuda{color:var(--dim);font-size:14px;line-height:1.5;margin:0}
+  .fila{display:flex;gap:10px;flex-wrap:wrap}
+  .fila>*{flex:1}
+  .aviso{font-size:13px;color:var(--dim);text-align:center;padding:6px 10px}
+  .firma{font-size:12px;color:#5d574e;text-align:center;padding:18px 10px 8px;letter-spacing:.3px}
+  .firma b{color:#8a8172;font-weight:600}
+  .buscar{border:1px dashed var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:10px}
+  .buscar .rot{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
+
+  /* Escenario */
+  #escena{height:100vh;height:100dvh;overflow:hidden}
+  #escena header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  #escena header .tit{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim);font-size:15px;cursor:pointer}
+  #escena header button{padding:8px 11px;font-size:15px}
+  #btnMic{min-width:112px}
+  #btnMic.escuchando{background:#163020;border-color:var(--ok);color:var(--ok)}
+  #btnMic.escuchando::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:7px;animation:lat 1.2s infinite}
+  @keyframes lat{50%{opacity:.25}}
+  #estrofaInfo{color:var(--dim);font-size:13px;padding:8px 18px 0;letter-spacing:.5px;text-transform:uppercase;display:flex;justify-content:space-between;gap:10px}
+  #estrofaInfo .tono{color:var(--acc)}
+  #letra{flex:1;overflow-y:auto;padding:6px 18px 18px;scroll-behavior:smooth}
+  .verso{font-size:var(--fs);line-height:1.28;padding:6px 8px;margin:2px 0;border-radius:10px;color:var(--txt);transition:color .25s,background .25s}
+  .verso.con-ac{line-height:1.95;white-space:pre-wrap;padding-top:.3em;padding-bottom:.05em}
+  .verso.pasado{color:var(--done)}
+  .verso.actual{background:#2a2213;color:#fff;box-shadow:inset 4px 0 0 var(--acc)}
+  .verso.cantando{color:#b3aa9a;box-shadow:inset 4px 0 0 #6b5729;background:#17150f}
+  .verso.actual + .verso.actual{border-top-left-radius:0;border-top-right-radius:0;margin-top:-2px}
+  .estrofa{padding:6px 0 14px;border-bottom:1px solid var(--line);margin-bottom:10px}
+  .estrofa:last-of-type{border-bottom:0}
+  .relleno{height:55vh}
+  #letra{position:relative}
+  .verso.porvenir{color:#cfc8ba}
+  .seg{position:relative}
+  .seg.corto{display:inline-block}
+  .ac{position:absolute;left:0;top:-.78em;font-size:.6em;line-height:1;color:var(--acc);font-weight:700;white-space:nowrap;letter-spacing:.2px}
+  .pasado .ac{color:#7a6331}
+  .solo-ac{font-size:calc(var(--fs) * .62);color:var(--acc);font-weight:700;padding:4px 8px;white-space:pre-wrap;word-spacing:.3em}
+  .rotulo{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;padding:10px 8px 0}
+  .tab{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;white-space:pre;overflow-x:auto;color:var(--dim);padding:0 8px}
+  #sigue{border-top:1px solid var(--line);padding:10px 18px 14px;background:#12110e;transition:background .3s}
+  #sigue .rot{font-size:12px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim)}
+  #sigue .txt{font-size:calc(var(--fs) * .72);line-height:1.25;color:var(--dim);margin-top:3px}
+  #sigue .txt.con-ac{line-height:2.2;white-space:pre-wrap}
+  #sigue.cerca{background:#2b1a10}
+  #sigue.cerca .rot{color:var(--acc2)}
+  #sigue.cerca .txt{color:#ffd9b8}
+  #nav{display:flex;gap:8px;padding:8px 10px 10px;border-top:1px solid var(--line)}
+  #nav button{flex:1;padding:14px 6px;font-size:16px}
+  #oido{font-size:12px;color:#5d574e;padding:0 18px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:16px}
+  #retomar{display:none;margin:8px 18px;padding:14px;border-radius:12px;background:#2b1a10;border:1px solid var(--acc2);color:#ffd9b8;text-align:center;font-size:16px}
+  #retomar.on{display:block}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:20px;z-index:9}
+  .modal.on{display:flex}
+  .modal .caja{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;max-width:440px;width:100%;display:flex;flex-direction:column;gap:12px}
+  .modal p{margin:0;line-height:1.45}
+  label.ch{display:flex;gap:10px;align-items:center;font-size:15px}
+  label.ch input{width:auto}
+  .tonos{display:flex;align-items:center;gap:10px}
+  .tonos b{flex:1;text-align:center;font-size:18px;color:var(--acc)}
+</style>
+</head>
+<body>
+
+<!-- LISTA -->
+<section id="lista" class="vista on">
+  <header class="barra"><h1>Atril de letras</h1><button class="pri" id="btnNueva">+ Canción</button></header>
+  <div class="cont">
+    <div id="canciones"></div>
+    <div class="aviso" id="avisoGuardado"></div>
+    <div class="buscar">
+      <div class="rot">Copia de seguridad</div>
+      <p class="ayuda">Las canciones quedan en este teléfono. Guardá una copia de vez en cuando, o para pasarlas a otro teléfono.</p>
+      <div class="fila">
+        <button id="btnExportar">Guardar copia</button>
+        <button id="btnImportar">Cargar copia</button>
+      </div>
+      <input type="file" id="inImportar" accept=".json,application/json" style="display:none">
+    </div>
+    <div class="firma">Atril de letras · creado por <b>Ezequiel de Luis</b></div>
+  </div>
+</section>
+
+<!-- EDITOR -->
+<section id="editor" class="vista">
+  <header class="barra"><button id="edVolver">‹ Volver</button><h1 id="edTitulo">Nueva canción</h1></header>
+  <div class="cont">
+    <div class="fila">
+      <input id="inTitulo" placeholder="Título">
+      <input id="inArtista" placeholder="Artista (opcional)">
+    </div>
+    <div class="buscar">
+      <div class="rot">Traer la letra de internet</div>
+      <div class="fila">
+        <a class="btn" id="lnkCifra" target="_blank" rel="noopener">Buscar en Cifra Club</a>
+        <a class="btn" id="lnkLetra" target="_blank" rel="noopener">Buscar solo la letra</a>
+      </div>
+      <p class="ayuda">Se abre la búsqueda en otra pestaña. Copiá la cifra completa (con los acordes) y pegala acá abajo: la app reconoce sola qué renglones son acordes, cuáles son letra y cuáles son títulos como [Intro] o [Estribillo].</p>
+    </div>
+    <button id="btnPegar" style="display:none">Pegar lo que copié</button>
+    <textarea id="inLetra" placeholder="Pegá acá la letra o la cifra.&#10;&#10;Dejá una línea en blanco entre estrofa y estrofa."></textarea>
+    <p class="ayuda">Si el estribillo se repite, conviene que esté escrito cada vez que se canta, así la app sabe por dónde vas.</p>
+    <div class="fila">
+      <button class="pri" id="edGuardar">Guardar</button>
+      <button id="edEnsayar">Guardar y abrir</button>
+    </div>
+    <button class="peligro" id="edBorrar" style="display:none">Borrar canción</button>
+  </div>
+</section>
+
+<!-- ESCENARIO -->
+<section id="escena" class="vista">
+  <header>
+    <button id="esVolver" aria-label="Volver">‹</button>
+    <div class="tit" id="esTitulo" title="Ajustes"></div>
+    <button id="btnMenos" aria-label="Letra más chica">A−</button>
+    <button id="btnMas" aria-label="Letra más grande">A+</button>
+    <button id="btnMic">Escuchar</button>
+  </header>
+  <div id="estrofaInfo"><span id="infoEstrofa"></span><span class="tono" id="infoTono"></span></div>
+  <div id="retomar">El micrófono se pausó. Tocá acá para seguir escuchando.</div>
+  <div id="letra"></div>
+  <div id="oido"></div>
+  <div id="sigue"><div class="rot" id="sigueRot">Sigue</div><div class="txt" id="sigueTxt"></div></div>
+  <div id="nav">
+    <button id="navAnt">◀ Estrofa</button>
+    <button id="navSig">Estrofa ▶</button>
+  </div>
+</section>
+
+<div class="modal" id="modal"><div class="caja" id="modalCaja"></div></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ---------- utilidades ---------- */
+const $ = s => document.querySelector(s);
+const ls = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+function esc(t){ return String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function norm(t){
+  return t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .replace(/[^a-z0-9\s]/g," ").split(/\s+/).filter(Boolean);
+}
+function lev(a,b){
+  if (Math.abs(a.length-b.length) > 2) return 9;
+  const m=a.length, n=b.length; let prev=Array.from({length:n+1},(_,i)=>i);
+  for (let i=1;i<=m;i++){ const cur=[i];
+    for (let j=1;j<=n;j++) cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    prev=cur; }
+  return prev[n];
+}
+function sim(a,b){
+  if (a===b) return 1;
+  const L=Math.min(a.length,b.length);
+  if (L>=4){ const d=lev(a,b);
+    if (d===1) return .85;
+    if (d===2 && L>=7) return .7;
+    if (L>=5 && a.slice(0,5)===b.slice(0,5)) return .7; }
+  return 0;
+}
+function uid(){ return "c"+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+
+/* ---------- acordes: reconocer y transportar (siempre con sostenidos) ---------- */
+const ANG = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const LAT = ["Do","Do#","Re","Re#","Mi","Fa","Fa#","Sol","Sol#","La","La#","Si"];
+const IDX = {C:0,D:2,E:4,F:5,G:7,A:9,B:11,Do:0,Re:2,Mi:4,Fa:5,Sol:7,La:9,Si:11};
+const LATM = LAT.map(x=>x.toUpperCase());
+const RAIZ = "(SOL|DO|RE|MI|FA|LA|SI|Sol|Do|Re|Mi|Fa|La|Si|[A-G])([#b]?)";
+const MOD = "(?:sus[24]?|add\\d+|maj\\d*|dim\\d*|aug|[#b+\\-]?\\d+|\\/\\d+|M\\d*|\\+|-|º|°|ø)";
+const SUF = "((?:maj7?|M7?|min|mi|m|dim|aug|º|°|\\+)?" + MOD + "*(?:\\([^)]*\\))?" + MOD + "*)";
+const RE_AC = new RegExp("^" + RAIZ + SUF + "(?:\\/" + RAIZ + ")?$");
+const RE_SEP = /^(\||\/|-+|x?\d+x?|\(\d+x\)|\(x\d+\)|%|\.+|N\.?C\.?|\*+|~+|[()]+|:\|\|?|\|\|?:|\(?bis\)?|[A-Za-zÀ-ÿ]+:)$/i;
+function nucleo(tok){
+  // Saca paréntesis o corchetes que envuelven el acorde, pero no los propios del acorde: Bm7(5-)
+  const m = tok.match(/^([(\[]*)(.*)$/); let pre = m[1], c = m[2], post = "";
+  const abiertos = s => (s.match(/\(/g)||[]).length - (s.match(/\)/g)||[]).length;
+  while (/[)\]]$/.test(c) && (c.endsWith("]") || abiertos(c) < 0)){ post = c.slice(-1) + post; c = c.slice(0,-1); }
+  return [pre, c, post];
+}
+function esAcorde(tok){ const [,c] = nucleo(tok); return c.length>0 && RE_AC.test(c); }
+function nota(r, alt, n){
+  const lat = r.length > 1, may = lat && r === r.toUpperCase();
+  const k = lat ? r[0] + r.slice(1).toLowerCase() : r;
+  let i = IDX[k] + (alt==="#"?1:alt==="b"?-1:0) + n;
+  i = ((i % 12) + 12) % 12;
+  return (lat ? (may ? LATM : LAT) : ANG)[i];
+}
+function transponer(tok, n){
+  const [a, c, z] = nucleo(tok);
+  const m = c.match(RE_AC); if (!m) return tok;
+  let s = nota(m[1], m[2], n) + m[3];
+  if (m[4]) s += "/" + nota(m[4], m[5], n);
+  return a + s + z;
+}
+function esLineaAcordes(l){
+  const toks = l.trim().split(/\s+/).filter(Boolean);
+  if (!toks.length) return false;
+  let ac = 0, otras = 0;
+  for (const t of toks){ if (esAcorde(t)) ac++; else if (!RE_SEP.test(t)) otras++; }
+  // Todo acordes, o casi todo (por si se cuela un símbolo raro): nunca es letra.
+  return ac > 0 && (otras === 0 || (ac >= 2 && ac / (ac + otras) >= .75));
+}
+function posAcordes(l){
+  const out = []; const re = /\S+/g; let m;
+  while ((m = re.exec(l))){ if (esAcorde(m[0])) out.push({col:m.index, ch:m[0]}); }
+  return out;
+}
+
+/* ---------- títulos de partes (se traducen al castellano) ---------- */
+const ROT = {"refrao":"Estribillo","refrão":"Estribillo","refrain":"Estribillo","chorus":"Estribillo","coro":"Estribillo",
+  "pre-refrao":"Pre-estribillo","pré-refrão":"Pre-estribillo","pre-chorus":"Pre-estribillo",
+  "primeira parte":"Primera parte","segunda parte":"Segunda parte","terceira parte":"Tercera parte","quarta parte":"Cuarta parte",
+  "ponte":"Puente","bridge":"Puente","verse":"Estrofa","solo":"Solo","intro":"Intro","final":"Final","outro":"Final","dedilhado":"Punteo","riff":"Riff","tab":"Tablatura"};
+function traducirRot(t){ const k = t.trim().toLowerCase().replace(/\s*\d+$/,""); const num = (t.match(/\s(\d+)$/)||[""])[0]; return (ROT[k] ? ROT[k] + num : t.trim()); }
+
+/* ---------- canción → estrofas ---------- */
+const RE_INDICACION = /^\s*[\[(]?\s*(\d+\s*[ªºa°.]?\s*|(1r|2d|3r|4t)[ao]\s*|primer[ao]?\s+|segund[ao]\s+|tercer[ao]?\s+|[uú]ltim[ao]\s+)?(estrofa|estribillo|coro|intro|introducci[oó]n|puente|final|solo|interludio|instrumental|recitado|riff|punteo|pre-?estribillo|parte|se repite|repite|repetir|bis|glosa|coda|outro|verso|refr[aã]o|ponte|chorus|verse|bridge|pre-?coro|cierre|remate|fin)(\s+(\d+|i{1,3}|iv|v|instrumental|final|bis|x\s*\d+|\d+\s*x|\d+\s*veces|dos veces|2 veces))*\s*[\])]?\s*[:.]?\s*(\(.*\))?\s*$/i;
+function parsear(texto){
+  const res = {tono:null, estrofas:[]};
+  const limpio = (texto||"")
+    .replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, "\n")
+    .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, "")
+    .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ")
+    .replace(/\t/g, "    ").replace(/♯/g, "#").replace(/♭/g, "b");
+  const bloques = limpio.split(/\n[ \t]*\n+/);
+  let crudos = [];
+  for (const b of bloques){
+    const ls_ = b.split("\n").map(l=>l.replace(/\s+$/,"")).filter(l=>l.trim());
+    const lineas = [];
+    for (let i=0;i<ls_.length;i++){
+      let l = ls_[i];
+      const mt = l.match(/^\s*(tom|tono|tonalidad|key)\s*:\s*(\S+)/i);
+      if (mt){ res.tono = mt[2]; continue; }
+      // Acordes entre corchetes dentro de la letra: [Am]Camino por la [G]orilla
+      const cp = [...l.matchAll(/\[([^\]]+)\]/g)];
+      if (cp.length && cp.every(m=>esAcorde(m[1]))){
+        let txt = "", last = 0; const acs = [];
+        for (const m of cp){ txt += l.slice(last, m.index); let col = txt.length; if (acs.length && col <= acs[acs.length-1].col) col = acs[acs.length-1].col + 1; acs.push({col, ch:m[1]}); last = m.index + m[0].length; }
+        txt += l.slice(last);
+        if (!txt.trim()) lineas.push({tipo:"acordes", texto: cp.map(m=>m[1]).join("  ")});
+        else lineas.push({tipo:"verso", texto: txt, acordes: acs});
+        continue;
+      }
+      if (RE_INDICACION.test(l)){ lineas.push({tipo:"rotulo", texto: traducirRot(l.trim().replace(/[:.]$/,""))}); continue; }
+      if (/^\s*[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ .]{1,24}:\s*$/.test(l) || /^\s*\([^)]{1,30}\)\s*$/.test(l)){ lineas.push({tipo:"rotulo", texto: traducirRot(l.trim().replace(/^\(|\)$|:$/g,""))}); continue; }
+      const mr = l.match(/^\s*\[([^\]]+)\]\s*(.*)$/);
+      if (mr){
+        lineas.push({tipo:"rotulo", texto: traducirRot(mr[1])});
+        const resto = mr[2];
+        if (!resto.trim()) continue;
+        if (esLineaAcordes(resto)){ lineas.push({tipo:"acordes", texto: resto.trim()}); continue; }
+        l = resto;
+      }
+      if (/\|[-\d]|[-\d]\||^\s*[eBGDAEbgda]\s*[|:]?-{2,}/.test(l) || /-{4,}\d|\d-{4,}/.test(l)){ lineas.push({tipo:"tab", texto:l}); continue; }
+      if (esLineaAcordes(l)){
+        const sig = ls_[i+1];
+        if (sig !== undefined && !esLineaAcordes(sig) && !/^\s*\[/.test(sig) && !/\|[-\d]/.test(sig)){
+          lineas.push({tipo:"verso", texto: sig, acordes: posAcordes(l)}); i++; continue;
+        }
+        lineas.push({tipo:"acordes", texto: l.trim()}); continue;
+      }
+      if (!/[A-Za-zÀ-ÿ]{2,}/.test(l.replace(/\b(bis|x\d+|\d+x)\b/gi,""))){ lineas.push({tipo:"rotulo", texto: l.trim()}); continue; }
+      lineas.push({tipo:"verso", texto:l, acordes:[]});
+    }
+    if (lineas.length) crudos.push(lineas);
+  }
+  // Bloques sin letra (intro, solo, solo títulos) se pegan a la estrofa siguiente.
+  let pendiente = [];
+  for (const L of crudos){
+    if (!L.some(x=>x.tipo==="verso")){ pendiente = pendiente.concat(L); continue; }
+    res.estrofas.push(pendiente.concat(L)); pendiente = [];
+  }
+  if (pendiente.length){
+    if (res.estrofas.length) res.estrofas[res.estrofas.length-1] = res.estrofas[res.estrofas.length-1].concat(pendiente);
+    else res.estrofas.push(pendiente);
+  }
+  return res;
+}
+
+/* ---------- almacenamiento ---------- */
+const Store = {
+  modo:"local", col:null, songs:[],
+  async init(){
+    this.songs = ls.get("atril.canciones", []);
+    try{
+      if (window.claude && claude.use){
+        const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
+        const id = user ? await user.id() : null;
+        if (db && id){
+          this.col = db.collection("data/users/" + id);
+          const snap = await Promise.race([this.col.get(), new Promise((_,r)=>setTimeout(()=>r("t"),10000))]);
+          const remotas = snap.docs.filter(d=>d.exists).map(d=>({id:d.id, ...d.data()}));
+          this.modo = "nube";
+          const ids = new Set(remotas.map(s=>s.id));
+          for (const s of this.songs){ if (!ids.has(s.id)){ remotas.push(s); try{ await this.col.doc(s.id).set(s); }catch(e){} } }
+          this.songs = remotas; ls.set("atril.canciones", this.songs);
+        }
+      }
+    }catch(e){ this.modo="local"; }
+    this.songs.sort((a,b)=>(a.orden||0)-(b.orden||0));
+  },
+  async guardar(s){
+    const i = this.songs.findIndex(x=>x.id===s.id);
+    if (i>=0) this.songs[i]=s; else this.songs.push(s);
+    ls.set("atril.canciones", this.songs);
+    if (this.col){ try{ await this.col.doc(s.id).set(s); }catch(e){ avisar("No se pudo guardar en la nube; quedó guardada en este teléfono."); } }
+  },
+  async borrar(id){
+    this.songs = this.songs.filter(x=>x.id!==id); ls.set("atril.canciones", this.songs);
+    if (this.col){ try{ await this.col.doc(id).delete(); }catch(e){} }
+  }
+};
+function avisar(t){ $("#avisoGuardado").textContent = t; }
+
+/* ---------- vistas ---------- */
+function mostrar(id){ document.querySelectorAll(".vista").forEach(v=>v.classList.toggle("on", v.id===id)); }
+function pintarLista(){
+  const box = $("#canciones");
+  if (!Store.songs.length){
+    box.innerHTML = '<div class="vacio">Todavía no hay canciones.<br>Tocá <b>+ Canción</b>, buscala en Cifra Club o pegá la letra, y listo.</div>';
+  } else {
+    box.innerHTML = Store.songs.map(s=>{
+      const p = parsear(s.letra), n = p.estrofas.length;
+      const conAc = p.estrofas.some(e=>e.some(x=>x.tipo==="acordes" || (x.acordes && x.acordes.length)));
+      const det = [s.artista, `${n} estrofa${n===1?"":"s"}`, conAc ? "con acordes" : ""].filter(Boolean).join(" · ");
+      return `<div class="cancion" data-id="${s.id}">
+        <div class="t">${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
+        <button data-acc="sub" aria-label="Subir">↑</button>
+        <button data-acc="edit">Editar</button>
+        <button class="pri" data-acc="tocar">Cantar</button></div>`;
+    }).join("");
+  }
+  avisar(Store.modo==="nube" ? "Tus canciones se guardan en tu cuenta." : "Tus canciones se guardan en este teléfono.");
+}
+$("#canciones").addEventListener("click", async e=>{
+  const b = e.target.closest("button"); if (!b) return;
+  const id = b.closest(".cancion").dataset.id;
+  const idx = Store.songs.findIndex(s=>s.id===id);
+  if (b.dataset.acc==="edit") abrirEditor(Store.songs[idx]);
+  if (b.dataset.acc==="tocar") abrirEscena(idx);
+  if (b.dataset.acc==="sub" && idx>0){
+    const a = Store.songs[idx-1], c = Store.songs[idx];
+    a.orden = idx; c.orden = idx-1; Store.songs[idx-1]=c; Store.songs[idx]=a;
+    pintarLista(); await Store.guardar(c); await Store.guardar(a);
+  }
+});
+
+/* ---------- editor ---------- */
+let editando = null;
+function actualizarBusqueda(){
+  const t = $("#inTitulo").value.trim(), a = $("#inArtista").value.trim();
+  const q = [t, a].filter(Boolean).join(" ");
+  $("#lnkCifra").href = "https://www.google.com/search?q=" + encodeURIComponent("site:cifraclub.com " + q);
+  $("#lnkLetra").href = "https://www.google.com/search?q=" + encodeURIComponent(q + " letra");
+}
+$("#inTitulo").addEventListener("input", actualizarBusqueda);
+$("#inArtista").addEventListener("input", actualizarBusqueda);
+function abrirEditor(s){
+  editando = s || null;
+  $("#edTitulo").textContent = s ? "Editar canción" : "Nueva canción";
+  $("#inTitulo").value = s ? s.titulo : "";
+  $("#inArtista").value = s ? (s.artista||"") : "";
+  $("#inLetra").value = s ? s.letra : "";
+  $("#edBorrar").style.display = s ? "" : "none";
+  actualizarBusqueda(); mostrar("editor");
+}
+async function guardarEditor(){
+  const titulo = $("#inTitulo").value.trim() || "Sin título";
+  const artista = $("#inArtista").value.trim();
+  const letra = $("#inLetra").value.replace(/\r/g,"").replace(/^\s*\n|\s+$/g,"");
+  if (!letra.trim()){ $("#inLetra").focus(); return null; }
+  const s = editando ? {...editando, titulo, artista, letra} : {id:uid(), titulo, artista, letra, tono:0, orden:Store.songs.length};
+  await Store.guardar(s); return s;
+}
+$("#btnNueva").onclick = ()=>abrirEditor(null);
+$("#edVolver").onclick = ()=>{ pintarLista(); mostrar("lista"); };
+$("#edGuardar").onclick = async ()=>{ if (await guardarEditor()){ pintarLista(); mostrar("lista"); } };
+$("#edEnsayar").onclick = async ()=>{ const s = await guardarEditor(); if (s){ pintarLista(); abrirEscena(Store.songs.findIndex(x=>x.id===s.id)); } };
+$("#edBorrar").onclick = ()=>{
+  modal(`<p>¿Borrar <b>${esc(editando.titulo)}</b>? No se puede deshacer.</p>
+    <div class="fila"><button data-r="no">Cancelar</button><button class="peligro" data-r="si">Borrar</button></div>`,
+    async r=>{ if (r==="si"){ await Store.borrar(editando.id); pintarLista(); mostrar("lista"); } });
+};
+function modal(html, cb){
+  const m=$("#modal"); $("#modalCaja").innerHTML=html; m.classList.add("on");
+  $("#modalCaja").onclick = e=>{ const b=e.target.closest("button[data-r]"); if(!b) return;
+    if (b.dataset.r.startsWith("+") || b.dataset.r.startsWith("-")){ cb && cb(b.dataset.r); return; }
+    m.classList.remove("on"); cb && cb(b.dataset.r); };
+}
+const modalAbierto = ()=>$("#modal").classList.contains("on");
+
+/* ---------- estado del escenario ---------- */
+let cancion=null, estrofas=[], versos=[], actual=0, cancionIdx=0, tonoOrig=null;
+function preparar(s){
+  const p = parsear(s.letra); estrofas = p.estrofas; tonoOrig = p.tono; versos = [];
+  estrofas.forEach((e,si)=>{
+    const idxs = e.map((x,i)=>x.tipo==="verso"?i:-1).filter(i=>i>=0);
+    idxs.forEach((li,k)=>{
+      const w = norm(e[li].texto); let clave = w.filter(x=>x.length>=3); if (clave.length<2) clave=w;
+      versos.push({s:si, li, k, total:idxs.length, ultimo:k===idxs.length-1, clave});
+    });
+  });
+}
+const semis = ()=> (cancion && cancion.tono) || 0;
+
+function htmlLinea(x, n){
+  if (x.tipo==="rotulo") return `<div class="rotulo">${esc(x.texto)}</div>`;
+  if (x.tipo==="tab") return `<div class="tab">${esc(x.texto)}</div>`;
+  if (x.tipo==="acordes") return `<div class="solo-ac">${esc(x.texto.split(/(\s+)/).map(t=>/\S/.test(t)&&esAcorde(t)?transponer(t,n):t).join(""))}</div>`;
+  return null;
+}
+function htmlVerso(x, n){
+  if (!x.acordes || !x.acordes.length) return {cls:"", html: esc(x.texto.trim())};
+  let t = x.texto; const ult = x.acordes[x.acordes.length-1];
+  if (t.length < ult.col + 1) t = t.padEnd(ult.col + 1, " ");
+  let out = esc(t.slice(0, x.acordes[0].col));
+  x.acordes.forEach((a,i)=>{
+    const fin = i+1 < x.acordes.length ? x.acordes[i+1].col : t.length;
+    let seg = t.slice(a.col, fin); const ch = transponer(a.ch, n);
+    const corto = seg.trim().length < ch.length + 1;
+    if (!seg.trim()) seg = " ";
+    const est = corto ? ` style="min-width:${(ch.length*0.42+0.45).toFixed(2)}em"` : "";
+    out += `<span class="seg${corto?" corto":""}"${est}><span class="ac">${esc(ch)}</span>${esc(seg)}</span>`;
+  });
+  return {cls:"con-ac", html: out};
+}
+
+/* ---------- escenario ---------- */
+let fs = ls.get("atril.fs", 30);
+function aplicarFs(){ document.documentElement.style.setProperty("--fs", fs+"px"); ls.set("atril.fs", fs); }
+aplicarFs();
+$("#btnMas").onclick = ()=>{ fs=Math.min(64,fs+3); aplicarFs(); };
+$("#btnMenos").onclick = ()=>{ fs=Math.max(16,fs-3); aplicarFs(); };
+
+let wake=null;
+async function pedirPantalla(){ try{ if (navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); }catch(e){} }
+document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible" && $("#escena").classList.contains("on")) pedirPantalla(); });
+
+function abrirEscena(idx){
+  cancionIdx = idx; cancion = Store.songs[idx];
+  preparar(cancion); actual = -1; armado = ""; Oido.reiniciar();
+  $("#esTitulo").textContent = cancion.titulo + (cancion.artista ? " · " + cancion.artista : "");
+  mostrar("escena"); pintar(true); pedirPantalla();
+}
+$("#esVolver").onclick = ()=>{ Mic.parar(); try{ wake && wake.release(); }catch(e){} pintarLista(); mostrar("lista"); };
+
+function etiquetaTono(){
+  const n = semis();
+  if (tonoOrig && esAcorde(tonoOrig)) return n ? `Tono: ${transponer(tonoOrig, n)} (original ${transponer(tonoOrig,0)})` : `Tono: ${transponer(tonoOrig,0)}`;
+  return n ? `Transportado ${n>0?"+":""}${n}` : "";
+}
+let armado = "";
+// Arma la canción entera, una estrofa debajo de la otra. Se rearma solo al cambiar de canción o de tono.
+function armarLetra(){
+  const n = semis();
+  $("#letra").innerHTML = estrofas.map((e,si)=>`<div class="estrofa">` + e.map((x,i)=>{
+    const h = htmlLinea(x,n); if (h) return h;
+    const g = versos.findIndex(v=>v.s===si && v.li===i);
+    const r = htmlVerso(x,n);
+    return `<div class="verso porvenir ${r.cls}" data-g="${g}">${r.html}</div>`;
+  }).join("") + `</div>`).join("") + `<div class="relleno"></div>`;
+  armado = (cancion && cancion.id) + ":" + n;
+}
+const ADELANTE = 2;   // cuántos versos que vienen quedan resaltados
+function pintar(saltar){
+  $("#infoTono").textContent = etiquetaTono();
+  if (armado !== (cancion && cancion.id) + ":" + semis()) { armarLetra(); saltar = true; }
+  if (!versos.length){ $("#infoEstrofa").textContent = ""; $("#sigue").style.display = "none"; return; }
+  const fin = actual >= versos.length-1;
+  document.querySelectorAll("#letra .verso").forEach(d=>{
+    const g = +d.dataset.g;
+    let cls = "porvenir";
+    if (g < actual) cls = "pasado";
+    else if (g === actual) cls = "cantando";
+    else if (g <= actual + ADELANTE) cls = "actual";
+    d.classList.remove("pasado","cantando","actual","porvenir"); d.classList.add(cls);
+  });
+  const ref = versos[fin ? actual : actual+1];
+  $("#infoEstrofa").textContent = `Estrofa ${ref.s+1} de ${estrofas.length}`;
+  // Abajo solo aparece algo al terminar: la canción que sigue en la lista.
+  const prox = Store.songs[cancionIdx+1];
+  const caja = $("#sigue");
+  if (fin){ caja.style.display = ""; $("#sigueRot").textContent = "Fin de la canción"; const tx=$("#sigueTxt"); tx.className="txt"; tx.textContent = prox ? "Próxima: " + prox.titulo : ""; }
+  else caja.style.display = "none";
+  caja.classList.remove("cerca");
+  $("#navSig").textContent = (ref.s+1 < estrofas.length) ? "Estrofa ▶" : (prox ? "Próxima canción ▶" : "Estrofa ▶");
+  // Lo que se está cantando queda cerca del medio; los dos versos que siguen, debajo.
+  const el = $("#letra .cantando") || $("#letra .actual");
+  if (el){
+    const c = $("#letra");
+    const top = el.offsetTop - c.offsetTop - c.clientHeight * (actual >= 0 ? 0.24 : 0.08);
+    c.scrollTo({top: Math.max(0, top), behavior: saltar ? "auto" : "smooth"});
+  }
+}
+// La marca fuerte muestra lo que viene: los dos versos siguientes al que se está cantando.
+function marcado(){ return (actual >= 0 && actual >= versos.length-1) ? actual : actual+1; }
+function irA(g, saltar){ actual = Math.max(-1, Math.min(versos.length-1, g-1)); pintar(saltar); }
+function primeraDe(si){ return versos.findIndex(v=>v.s===si); }
+
+$("#letra").addEventListener("click", e=>{
+  const d = e.target.closest(".verso"); if (!d || !versos.length) return;
+  const g = +d.dataset.g; if (g>=0){ irA(g); Oido.cortar(); }
+});
+function estrofaAnt(){ if (!versos.length) return; const v=versos[marcado()]; irA(primeraDe(v.k>0 ? v.s : Math.max(0, v.s-1))); Oido.cortar(); }
+function estrofaSig(){
+  if (!versos.length) return; const si = versos[marcado()].s;
+  if (si+1 < estrofas.length){ irA(primeraDe(si+1)); Oido.cortar(); }
+  else if (Store.songs[cancionIdx+1]) abrirEscena(cancionIdx+1);
+}
+$("#navAnt").onclick = estrofaAnt;
+$("#navSig").onclick = estrofaSig;
+// Deslizar el dedo
+let x0=null,y0=null;
+$("#letra").addEventListener("touchstart",e=>{x0=e.touches[0].clientX;y0=e.touches[0].clientY;},{passive:true});
+$("#letra").addEventListener("touchend",e=>{
+  if (x0==null) return; const dx=e.changedTouches[0].clientX-x0, dy=e.changedTouches[0].clientY-y0; x0=null;
+  if (Math.abs(dx)>70 && Math.abs(dx)>Math.abs(dy)*1.5) (dx<0?estrofaSig:estrofaAnt)();
+},{passive:true});
+// Pedal Bluetooth o teclado: los pedales pasapáginas mandan flechas o Av Pág / Re Pág
+document.addEventListener("keydown", e=>{
+  if (!$("#escena").classList.contains("on") || modalAbierto()) return;
+  if (["ArrowRight","ArrowDown","PageDown"," ","Enter"].includes(e.key)){ e.preventDefault(); estrofaSig(); }
+  else if (["ArrowLeft","ArrowUp","PageUp","Backspace"].includes(e.key)){ e.preventDefault(); estrofaAnt(); }
+});
+
+/* ---------- el oído ---------- */
+const Oido = {
+  oidas:[], parcial:[], corte:0,
+  reiniciar(){ this.oidas=[]; this.parcial=[]; this.corte=0; },
+  cortar(){ this.corte = this.oidas.length + this.parcial.length; },
+  todas(){ return this.oidas.concat(this.parcial); },
+  final(t){ this.oidas.push(...norm(t)); this.parcial=[];
+    if (this.oidas.length>120){ const q=this.oidas.length-80; this.oidas=this.oidas.slice(q); this.corte=Math.max(0,this.corte-q); }
+    this.evaluar(); },
+  parcialTxt(t){ this.parcial = norm(t); this.evaluar(); },
+  puntaje(v, cola){
+    if (!v.clave.length || !cola.length) return 0;
+    // Cada palabra oída cuenta una sola vez (así "ay ay" no se confunde con "ay ay ay ay").
+    const usada = new Array(cola.length).fill(false);
+    let sum=0;
+    for (const w of v.clave){
+      let b=0, bi=-1;
+      for (let i=0;i<cola.length;i++){ if (usada[i]) continue; const s=sim(w,cola[i]); if (s>b){ b=s; bi=i; if (b===1) break; } }
+      if (bi>=0) usada[bi]=true; sum+=b;
+    }
+    return sum / v.clave.length;
+  },
+  // Reconoce el verso por sus primeras palabras, para reaccionar apenas se empieza a cantar.
+  inicio(v, cola){
+    const oidas = cola.filter(w=>w.length>=3).length;
+    const m = Math.min(v.clave.length, Math.max(2, oidas));
+    if (m < 2) return 0;
+    return this.puntaje({clave: v.clave.slice(0, m)}, cola.slice(-(m+2)));
+  },
+  terminoVerso(v, todas){
+    const fin = v.clave.slice(-2); if (!fin.length) return false;
+    const cola = todas.slice(-4); return fin.every(w=>cola.some(c=>sim(w,c)>=.85));
+  },
+  evaluar(){
+    if (!versos.length) return;
+    const todas = this.todas();
+    $("#oido").textContent = todas.slice(-10).join(" ");
+    let cola = todas.slice(Math.min(this.corte, todas.length));
+    // Antes de pasar al verso siguiente, se espera el final del verso que se está cantando
+    // cuando los dos empiezan parecido (repeticiones, "bis"): solo cuentan las palabras de después.
+    if (actual >= 0 && actual+1 < versos.length){
+      const cur = versos[actual], sig = versos[actual+1];
+      const ult = cur.clave[cur.clave.length-1];
+      let pos = -1;
+      for (let i=cola.length-1;i>=0;i--){ if (ult && sim(cola[i], ult) >= .85){ pos = i; break; } }
+      const parecidos = this.inicio(sig, cur.clave) >= .8;
+      if (pos >= 0 && parecidos) cola = cola.slice(pos+1);
+      else if (parecidos) cola = [];
+    }
+    cola = cola.slice(-14);
+    let mejor=-1, mp=0;
+    if (cola.length>=2){
+      // Sigue la canción en orden: solo puede pasar al verso que viene.
+      // Si se saltó uno, acepta el siguiente a ese, pero pidiendo más coincidencia.
+      // Nunca busca más abajo, así un estribillo o una estrofa repetida no hace saltear partes.
+      const pasos = [[1, .55], [2, .85]];
+      for (const [d, umbral] of pasos){
+        const g = actual + d; if (g >= versos.length) break;
+        const v = versos[g];
+        const completo = this.puntaje(v, cola.slice(-(v.clave.length+4)));
+        // Para saltear un verso hace falta oír el verso entero, no solo el comienzo.
+        const p = d === 1 ? Math.max(completo, this.inicio(v, cola) - .05) : (v.clave.length >= 2 ? completo : 0);
+        if (p >= umbral){ mejor = g; mp = p; break; }
+      }
+    }
+    // Las palabras ya usadas (incluidas las provisorias) no cuentan para el verso siguiente.
+    if (mejor>=0){ actual=mejor; this.corte=todas.length; pintar(); return; }
+  }
+};
+const Ajustes = { pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR") };
+
+/* ---------- micrófono ---------- */
+const Mic = {
+  quiere:false,   // el usuario tocó "Escuchar" y no lo apagó
+  vivo:false,     // el reconocimiento está andando en este momento
+  dict:null, rec:null, enMarco: window.self!==window.top, guardia:null,
+  get on(){ return this.quiere; },
+  async preparar(){ try{ if (window.claude && claude.use) this.dict = await claude.use("dictation"); }catch(e){ this.dict=null; } },
+  usarNativo(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; return SR && (!this.enMarco || !this.dict) ? SR : null; },
+  ui(){
+    const b=$("#btnMic"); b.classList.toggle("escuchando", this.quiere); b.textContent = this.quiere ? "Escucha" : "Escuchar";
+    if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
+  },
+  arrancar(){
+    this.quiere = true; this.ui(); this.encender();
+    // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
+    clearInterval(this.guardia);
+    this.guardia = setInterval(()=>{ if (this.quiere && !this.vivo) this.encender(true); }, 1500);
+  },
+  encender(desdeGuardia){
+    const SR = this.usarNativo();
+    if (SR){
+      if (!this.rec){
+        const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
+        r.onstart = ()=>{ this.vivo = true; this.ui(); };
+        r.onresult = ev=>{ let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const t=ev.results[i][0].transcript; if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
+        r.onerror = ev=>{
+          if (ev.error==="not-allowed" || ev.error==="service-not-allowed"){ this.quiere=false; this.vivo=false; clearInterval(this.guardia); this.rec=null; this.ui(); sinMic(); }
+          // "no-speech", "aborted", "network": se vuelve a prender solo en onend
+        };
+        r.onend = ()=>{ this.vivo = false; if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo){ try{ r.start(); }catch(e){} } }, 200); };
+        this.rec = r;
+      }
+      try{ this.rec.start(); }catch(e){}
+      return;
+    }
+    if (this.dict){
+      const d = this.dict;
+      if (!this._ligado){
+        d.onPartial(({text})=>Oido.parcialTxt(text||""));
+        d.onFinal(({text})=>Oido.final(text||""));
+        d.onState(({state, reason})=>{
+          if (state==="listening"){ this.vivo = true; this.ui(); }
+          else if (state==="idle"){
+            this.vivo = false;
+            if (reason==="viewer_stopped") { this.quiere = false; clearInterval(this.guardia); }
+            this.ui();
+          }
+        });
+        this._ligado = true;
+      }
+      if (this.vivo) return;
+      d.start().then(()=>{ this.vivo = true; this.ui(); }).catch(err=>{
+        const c = String(err && (err.code||err.message||err));
+        if (c.includes("not_granted")){ this.quiere=false; clearInterval(this.guardia); this.ui(); sinMic(); }
+        else if (desdeGuardia) $("#retomar").classList.add("on");
+      });
+      return;
+    }
+    this.quiere = false; this.ui(); sinMic();
+  },
+  // Un toque en la pantalla también lo reactiva si se había cortado.
+  revivir(){ if (this.quiere && !this.vivo) this.encender(); },
+  parar(){
+    this.quiere = false; clearInterval(this.guardia); this.ui();
+    if (this.rec){ try{ this.rec.stop(); }catch(e){} }
+    if (this.dict && this.vivo){ try{ this.dict.stop(); }catch(e){} }
+    this.vivo = false;
+  }
+};
+document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible") Mic.revivir(); });
+$("#escena").addEventListener("pointerdown", e=>{ if (!e.target.closest("#btnMic")) Mic.revivir(); });
+$("#btnMic").onclick = ()=>{ if (Mic.on) Mic.parar(); else Mic.arrancar(); };
+$("#retomar").onclick = ()=>Mic.arrancar();
+function sinMic(){
+  modal(`<p>No pude usar el micrófono en esta pantalla.</p>
+    <p class="ayuda">Abrí esta página en <b>Chrome</b> y aceptá el permiso del micrófono. Mientras tanto podés pasar las estrofas con los botones, deslizando el dedo o con un pedal.</p>
+    <div class="fila"><button data-r="ok" class="pri">Entendido</button></div>`);
+}
+
+/* ---------- ajustes (tocar el título) ---------- */
+$("#esTitulo").addEventListener("click", abrirAjustes);
+function abrirAjustes(){
+  const html = ()=>`<p><b>Ajustes</b></p>
+    <div><p class="ayuda" style="margin-bottom:6px">Tono de los acordes</p>
+      <div class="tonos"><button data-r="-1">− ½ tono</button><b id="ajTono">${esc(etiquetaTono()||"Original")}</b><button data-r="+1">+ ½ tono</button></div></div>
+    <label class="ch" style="flex-wrap:wrap">Idioma que escucha:
+      <select id="ajIdioma">
+        ${[["es-AR","Castellano (Argentina)"],["es-ES","Castellano (España)"],["es-MX","Castellano (México)"],["pt-BR","Portugués (Brasil)"],["qu","Quechua (si el teléfono lo admite)"]].map(([v,t])=>`<option value="${v}" ${v===Ajustes.idioma?"selected":""}>${t}</option>`).join("")}
+      </select></label>
+    <div class="fila"><button data-r="ok" class="pri">Listo</button></div>
+    <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
+  modal(html(), async r=>{
+    if (r==="+1" || r==="-1"){
+      cancion.tono = (((semis() + (+r)) % 12) + 18) % 12 - 6; // queda entre -6 y +5
+      $("#ajTono").textContent = etiquetaTono() || "Original"; pintar(true);
+      Store.guardar(cancion); return;
+    }
+    Ajustes.idioma = $("#ajIdioma").value;
+    ls.set("atril.idioma", Ajustes.idioma);
+    if (Mic.rec) Mic.rec.lang = Ajustes.idioma;
+  });
+}
+
+
+/* ---------- solo en la app instalada ---------- */
+if ("serviceWorker" in navigator){ window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); }); }
+try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
+if (navigator.clipboard && navigator.clipboard.readText){
+  const bp = $("#btnPegar"); bp.style.display = "";
+  bp.onclick = async ()=>{
+    try{ const t = await navigator.clipboard.readText();
+      if (t && t.trim()){ const ta=$("#inLetra"); ta.value = ta.value.trim() ? ta.value.replace(/\s+$/,"") + "\n\n" + t : t; }
+    }catch(e){ modal('<p>No pude leer lo copiado. Mantené apretado el cuadro de la letra y elegí <b>Pegar</b>.</p><div class="fila"><button data-r="ok" class="pri">Entendido</button></div>'); }
+  };
+}
+$("#btnExportar").onclick = ()=>{
+  const datos = JSON.stringify({app:"atril-de-letras", version:1, fecha:new Date().toISOString(), canciones:Store.songs}, null, 1);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([datos], {type:"application/json"}));
+  a.download = "atril-canciones-" + new Date().toISOString().slice(0,10) + ".json";
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+};
+$("#btnImportar").onclick = ()=>$("#inImportar").click();
+$("#inImportar").onchange = async e=>{
+  const f = e.target.files[0]; if (!f) return;
+  try{
+    const d = JSON.parse(await f.text()); const lista = Array.isArray(d) ? d : d.canciones;
+    if (!Array.isArray(lista)) throw 0;
+    let n=0; for (const s of lista){ if (s && s.letra){ await Store.guardar({...s, id: s.id || uid()}); n++; } }
+    pintarLista(); avisar(n + " canción" + (n===1?"":"es") + " cargada" + (n===1?"":"s") + ".");
+  }catch(err){ avisar("Ese archivo no parece una copia del Atril."); }
+  e.target.value = "";
+};
+
+/* ---------- arranque ---------- */
+pintarLista();
+Store.init().then(pintarLista);
+Mic.preparar();
+})();
+</script>
+</body>
+</html>
