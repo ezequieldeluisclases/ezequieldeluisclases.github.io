@@ -40,6 +40,9 @@
   .fila{display:flex;gap:10px;flex-wrap:wrap}
   .fila>*{flex:1}
   .aviso{font-size:13px;color:var(--dim);text-align:center;padding:6px 10px}
+  .instalar{display:none;align-items:center;gap:12px;margin:0 0 14px;padding:12px 14px;border-radius:12px;background:#1d2a1a;border:1px solid #4d7a3a;color:#d9f0cc;font-size:14px;line-height:1.35}
+  .instalar.on{display:flex}
+  .instalar>div{flex:1}
   .firma{font-size:12px;color:#5d574e;text-align:center;padding:18px 10px 8px;letter-spacing:.3px}
   .firma b{color:#8a8172;font-weight:600}
   .buscar{border:1px dashed var(--line);border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:10px}
@@ -109,6 +112,10 @@
 <section id="lista" class="vista on">
   <header class="barra"><h1>Atril de letras</h1><button class="pri" id="btnNueva">+ Canción</button></header>
   <div class="cont">
+    <div id="instalar" class="instalar">
+      <div><b>Instalala como aplicación</b><br><span id="instalarTxt">Así se abre sola, a pantalla completa, sin la barra de Chrome.</span></div>
+      <button class="pri" id="btnInstalar">Instalar</button>
+    </div>
     <div id="canciones"></div>
     <div class="aviso" id="avisoGuardado"></div>
     <div class="buscar">
@@ -122,7 +129,7 @@
     </div>
     <div class="buscar">
       <div class="rot">Pasale la app a un amigo</div>
-      <p class="ayuda">Le llega un enlace. Lo abre en Chrome y toca «Agregar a la pantalla principal» (o «Instalar»).</p>
+      <p class="ayuda">Le llega un enlace. Lo abre en Chrome y toca «Instalar»: le queda como aplicación, igual que a vos.</p>
       <div class="fila"><button id="btnCompartirApp">Compartir la app</button></div>
     </div>
     <div class="firma">Atril de letras · creado por <b>Ezequiel de Luis</b></div>
@@ -207,13 +214,19 @@ function lev(a,b){
 // Sensibilidad del oído: con banda o mucho ruido, el teléfono entiende menos palabras
 // y algunas mal; entonces se pide menos para avanzar y se toleran más deformaciones.
 const NIVELES = {
-  normal: {nombre:"Normal",      paso1:.55, paso2:.85, minInicio:2, unaPalabra:99, retomarPalabras:5, retomar:.85, laxo:false},
-  banda:  {nombre:"Con banda",   paso1:.45, paso2:.8,  minInicio:1, unaPalabra:7, retomarPalabras:4, retomar:.8,  laxo:true},
-  ruido:  {nombre:"Mucho ruido", paso1:.38, paso2:.75, minInicio:1, unaPalabra:5, retomarPalabras:4, retomar:.75, laxo:true}
+  normal: {nombre:"Normal",      paso1:.55, paso2:.85, minInicio:2, unaPalabra:99, retomarPalabras:4, retomar:.85, laxo:false},
+  banda:  {nombre:"Con banda",   paso1:.45, paso2:.8,  minInicio:1, unaPalabra:7, retomarPalabras:3, retomar:.8,  laxo:true},
+  ruido:  {nombre:"Mucho ruido", paso1:.38, paso2:.75, minInicio:1, unaPalabra:5, retomarPalabras:3, retomar:.78, laxo:true}
 };
 let nivel = NIVELES.normal;
+const _simCache = new Map();
 function sim(a,b){
   if (a===b) return 1;
+  const k = (nivel.laxo?"1":"0")+a+"|"+b; const c = _simCache.get(k); if (c!==undefined) return c;
+  if (_simCache.size > 20000) _simCache.clear();
+  const r = simCalc(a,b); _simCache.set(k, r); return r;
+}
+function simCalc(a,b){
   const L=Math.min(a.length,b.length);
   if (L>=4){ const d=lev(a,b);
     if (d===1) return .85;
@@ -849,22 +862,40 @@ const Oido = {
       }
     }
     // Retomar: si ya se escucharon varias palabras que no son el verso que sigue
-    // (habló, cantó otro, cambió la letra), busca dónde se retomó la canción.
-    // Primero hacia adelante y el más cercano, así no salta a una repetición lejana.
+    // (habló, cantó otro, cambió la letra, terminó y volvió al estribillo), busca dónde se retomó.
+    // Reconoce un verso entero o su comienzo (las primeras 4 palabras), para ubicarse rápido.
+    // Ante dos lugares parecidos, gana el más cercano hacia adelante; después, el más cercano hacia atrás.
     if (mejor < 0){
       const tail = todas.slice(Math.min(this.corte, todas.length)).slice(-16);
-      if (tail.filter(w=>w.length>=3).length >= nivel.retomarPalabras){
-        for (let g = actual+3; g < versos.length; g++){
+      const n = tail.filter(w=>w.length>=3).length;
+      const alFinal = actual >= versos.length-1;
+      const minPal = alFinal ? 3 : nivel.retomarPalabras;
+      if (n >= minPal){
+        // Si lo oído encaja igual de bien con el verso actual o los que siguen, no se mueve:
+        // así una línea repetida más abajo no hace saltar.
+        let ref = 0;
+        for (let g = Math.max(0, actual); g <= Math.min(versos.length-1, actual+2); g++){
+          const v = versos[g]; ref = Math.max(ref, this.puntaje(v, tail.slice(-(v.clave.length+3))));
+        }
+        let elegido = -1, mejorVal = -1;
+        for (let g = 0; g < versos.length; g++){
+          if (g === actual || g === actual+1 || g === actual+2) continue;
           const v = versos[g]; if (v.clave.length < 3) continue;
-          if (this.puntaje(v, tail.slice(-(v.clave.length+3))) >= nivel.retomar){ mejor = g; break; }
-        }
-        if (mejor < 0){
-          // Si no aparece adelante, puede haber vuelto a cantar algo de antes (un estribillo de más).
-          for (let g = actual; g >= 0; g--){
-            const v = versos[g]; if (v.clave.length < 4) continue;
-            if (this.puntaje(v, tail.slice(-(v.clave.length+2))) >= .9){ mejor = g; break; }
+          const completo = this.puntaje(v, tail.slice(-(v.clave.length+3)));
+          let comienzo = 0;
+          if (v.clave.length >= 4 && n >= 3){
+            const m = Math.min(4, n);
+            comienzo = this.puntaje({clave: v.clave.slice(0, m)}, tail.slice(-(m+2))) - .04;
           }
+          const p = Math.max(completo, comienzo);
+          const adelante = g > actual;
+          const umbral = adelante ? nivel.retomar : Math.max(nivel.retomar, .84);
+          if (p < umbral || p < ref + .08) continue;
+          const dist = adelante ? (g - actual) * .004 : .03 + (actual - g) * .004;
+          const val = p - dist;
+          if (val > mejorVal){ mejorVal = val; elegido = g; }
         }
+        if (elegido >= 0) mejor = elegido;
       }
     }
     // Las palabras ya usadas (incluidas las provisorias) no cuentan para el verso siguiente.
@@ -914,7 +945,7 @@ const Mic = {
           if (ev.error==="not-allowed" || ev.error==="service-not-allowed"){ this.quiere=false; this.vivo=false; clearInterval(this.guardia); this.rec=null; this.ui(); sinMic(); }
           // "no-speech", "aborted", "network": se vuelve a prender solo en onend
         };
-        r.onend = ()=>{ this.vivo = false; if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo){ try{ r.start(); }catch(e){} } }, 200); };
+        r.onend = ()=>{ this.vivo = false; if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo){ try{ r.start(); }catch(e){} } }, 50); };
         this.rec = r;
       }
       try{ this.rec.start(); }catch(e){}
@@ -1000,10 +1031,39 @@ if (navigator.clipboard && navigator.clipboard.readText){
     }catch(e){ modal('<p>No pude leer lo copiado. Mantené apretado el cuadro de la letra y elegí <b>Pegar</b>.</p><div class="fila"><button data-r="ok" class="pri">Entendido</button></div>'); }
   };
 }
+// Instalar como aplicación (para quien la abre desde un enlace en Chrome)
+let pedidoInstalar = null;
+const yaInstalada = ()=> matchMedia("(display-mode: standalone)").matches || matchMedia("(display-mode: fullscreen)").matches || document.referrer.startsWith("android-app://");
+function mostrarInstalar(){
+  if (yaInstalada() || window.self !== window.top) return;
+  const enAndroid = /Android/i.test(navigator.userAgent);
+  const esChrome = /Chrome\//.test(navigator.userAgent) && !/; wv\)|FBAN|FBAV|Instagram|WhatsApp/i.test(navigator.userAgent);
+  if (!enAndroid && !pedidoInstalar) return;
+  if (!pedidoInstalar){
+    $("#instalarTxt").textContent = esChrome
+      ? "Tocá los tres puntitos de Chrome (arriba a la derecha) y elegí «Instalar app» o «Agregar a la pantalla principal» → «Instalar»."
+      : "Abrí este enlace en Chrome (no dentro de WhatsApp): tocá los tres puntitos y elegí «Abrir en Chrome». Ahí vas a poder instalarla.";
+    $("#btnInstalar").style.display = "none";
+  } else {
+    $("#instalarTxt").textContent = "Así se abre sola, a pantalla completa, sin la barra de Chrome.";
+    $("#btnInstalar").style.display = "";
+  }
+  $("#instalar").classList.add("on");
+}
+window.addEventListener("beforeinstallprompt", e=>{ e.preventDefault(); pedidoInstalar = e; mostrarInstalar(); });
+window.addEventListener("appinstalled", ()=>{ pedidoInstalar = null; $("#instalar").classList.remove("on"); });
+$("#btnInstalar").onclick = async ()=>{
+  if (!pedidoInstalar) return;
+  pedidoInstalar.prompt();
+  try{ await pedidoInstalar.userChoice; }catch(e){}
+  pedidoInstalar = null; $("#instalar").classList.remove("on");
+};
+setTimeout(mostrarInstalar, 1500);
+
 // Compartir la app con amigos (WhatsApp u otra)
 const URL_APP = "https://ezequieldeluisclases.github.io/atril-de-letras/";
 $("#btnCompartirApp").onclick = async ()=>{
-  const texto = "Te paso el Atril de letras: muestra la letra y los acordes y te va siguiendo mientras cantás. Abrilo en Chrome y tocá «Agregar a la pantalla principal» para instalarlo. Creado por Ezequiel de Luis.";
+  const texto = "Te paso el Atril de letras: muestra la letra y los acordes y te va siguiendo mientras cantás. Abrí el enlace en Chrome (no dentro de WhatsApp) y tocá «Instalar». Creado por Ezequiel de Luis.";
   if (navigator.share){
     try{ await navigator.share({title:"Atril de letras", text:texto, url:URL_APP}); return; }
     catch(e){ if (e && e.name==="AbortError") return; }
