@@ -793,14 +793,19 @@ document.addEventListener("keydown", e=>{
 
 /* ---------- el oído ---------- */
 const Oido = {
-  oidas:[], parcial:[], corte:0,
+  oidas:[], parcial:[], corte:0, ultMov:Date.now(),
   reiniciar(){ this.oidas=[]; this.parcial=[]; this.corte=0; },
-  cortar(){ this.corte = this.oidas.length + this.parcial.length; },
+  cortar(){ this.corte = this.oidas.length + this.parcial.length; this.ultMov = Date.now(); },
   todas(){ return this.oidas.concat(this.parcial); },
-  final(t){ this.oidas.push(...norm(t)); this.parcial=[];
+  // Si el reconocedor se corta, lo provisorio se da por oído.
+  finParcial(){ if (this.parcial.length){ const base=this.oidas.length; this.oidas.push(...this.parcial); this.parcial=[]; this.corte=Math.min(this.corte, this.oidas.length); } },
+  final(t){ const base = this.oidas.length, w = norm(t);
+    // Las palabras provisorias ya usadas se reemplazan por las finales: el corte se acomoda a ellas.
+    if (this.corte > base) this.corte = base + Math.min(this.corte - base, w.length);
+    this.oidas.push(...w); this.parcial=[];
     if (this.oidas.length>120){ const q=this.oidas.length-80; this.oidas=this.oidas.slice(q); this.corte=Math.max(0,this.corte-q); }
     this.evaluar(); },
-  parcialTxt(t){ this.parcial = norm(t); this.evaluar(); },
+  parcialTxt(t){ this.parcial = norm(t); this.corte = Math.min(this.corte, this.oidas.length + this.parcial.length); this.evaluar(); },
   puntaje(v, cola){
     if (!v.clave.length || !cola.length) return 0;
     // Cada palabra oída cuenta una sola vez (así "ay ay" no se confunde con "ay ay ay ay").
@@ -842,8 +847,11 @@ const Oido = {
       let pos = -1;
       for (let i=cola.length-1;i>=0;i--){ if (ult && sim(cola[i], ult) >= .85){ pos = i; break; } }
       const parecidos = this.inicio(sig, cur.clave) >= .8;
+      // Si ya pasaron más palabras que las del verso, no se espera más (no se oyó la última palabra).
+      const pasoDeLargo = cola.length >= cur.clave.length + 3;
       if (pos >= 0 && parecidos) cola = cola.slice(pos+1);
-      else if (parecidos) cola = [];
+      else if (parecidos && !pasoDeLargo) cola = [];
+      else if (parecidos) cola = cola.slice(cur.clave.length);
     }
     cola = cola.slice(-14);
     let mejor=-1, mp=0;
@@ -889,7 +897,8 @@ const Oido = {
           }
           const p = Math.max(completo, comienzo);
           const adelante = g > actual;
-          const umbral = adelante ? nivel.retomar : Math.max(nivel.retomar, .84);
+          const trabado = Date.now() - this.ultMov > 12000 && n >= 5 ? .06 : 0;
+          const umbral = (adelante ? nivel.retomar : Math.max(nivel.retomar, .84)) - trabado;
           if (p < umbral || p < ref + .08) continue;
           const dist = adelante ? (g - actual) * .004 : .03 + (actual - g) * .004;
           const val = p - dist;
@@ -899,7 +908,7 @@ const Oido = {
       }
     }
     // Las palabras ya usadas (incluidas las provisorias) no cuentan para el verso siguiente.
-    if (mejor>=0){ actual=mejor; this.corte=todas.length; pintar(); return; }
+    if (mejor>=0){ actual=mejor; this.corte=todas.length; this.ultMov=Date.now(); pintar(); return; }
   }
 };
 const Ajustes = { pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
@@ -921,6 +930,15 @@ const Mic = {
   quiere:false,   // el usuario tocó "Escuchar" y no lo apagó
   vivo:false,     // el reconocimiento está andando en este momento
   dict:null, rec:null, enMarco: window.self!==window.top, guardia:null,
+  ultimo:0,       // última vez que llegó algo del reconocedor (texto o arranque)
+  arranques:0,
+  // Filtro de voz: el micrófono pasa por un filtro que deja la banda de la voz cantada
+  // (corta graves de guitarra y bombo, y agudos de platillos) y empareja el volumen.
+  pista:null, ac:null, flujo:null, an:null, buf:null,
+  pistaFalla: ls.get("atril.sinFiltro", false),
+  conSonido:0,    // milisegundos seguidos con sonido fuerte sin que llegue texto
+  inicioPista:0, textosConPista:0,
+  local:false, errRed:[],
   get on(){ return this.quiere; },
   async preparar(){ try{ if (window.claude && claude.use) this.dict = await claude.use("dictation"); }catch(e){ this.dict=null; } },
   usarNativo(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; return SR && (!this.enMarco || !this.dict) ? SR : null; },
@@ -932,23 +950,102 @@ const Mic = {
     this.quiere = true; this.ui(); this.encender();
     // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
     clearInterval(this.guardia);
-    this.guardia = setInterval(()=>{ if (this.quiere && !this.vivo) this.encender(true); }, 1500);
+    this.ultimo = Date.now();
+    this.guardia = setInterval(()=>{
+      if (!this.quiere) return;
+      if (!this.vivo){ this.encender(true); return; }
+      const quieto = Date.now() - this.ultimo;
+      const sonido = this.haySonido();
+      // Si con el filtro se oye sonido fuerte un buen rato y nunca llegó texto, este teléfono
+      // no acepta el filtro: se vuelve al micrófono común y se recuerda.
+      if (this.pista && this.textosConPista === 0 && Date.now() - this.inicioPista > 20000 && this.conSonido > 8000){
+        this.pistaFalla = true; ls.set("atril.sinFiltro", true); this.soltarPista(); this.reiniciar(); return;
+      }
+      // Se está cantando (hay sonido) pero no llega texto: el reconocedor se trabó.
+      if (this.rec && sonido && quieto > 4500) { this.reiniciar(); return; }
+      // A veces el teléfono deja el micrófono "prendido" pero no manda más nada: se lo reinicia.
+      if (this.rec && quieto > 7000) this.reiniciar();
+    }, 1500);
+  },
+  // Arma el filtro de voz (si el teléfono lo permite). Devuelve la pista filtrada o null.
+  async armarPista(){
+    if (this.pistaFalla || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
+    if (this.pista && this.pista.readyState === "live") return this.pista;
+    try{
+      const flujo = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:true, autoGainControl:true, channelCount:1}});
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ac = new AC(); try{ await ac.resume(); }catch(e){}
+      const fuente = ac.createMediaStreamSource(flujo);
+      const filtro = (tipo, f, q, g)=>{ const b = ac.createBiquadFilter(); b.type = tipo; b.frequency.value = f; if (q) b.Q.value = q; if (g) b.gain.value = g; return b; };
+      const g1 = filtro("highpass", 140, .7), g2 = filtro("highpass", 140, .7);   // saca graves (bordoneos, bombo)
+      const pres = filtro("peaking", 2000, .9, 5);                                  // realza la claridad de la voz
+      const a1 = filtro("lowpass", 4500, .7);                                       // saca agudos de platillos
+      const comp = ac.createDynamicsCompressor();
+      comp.threshold.value = -32; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = .004; comp.release.value = .25;
+      const ganancia = ac.createGain(); ganancia.gain.value = 1.6;
+      const an = ac.createAnalyser(); an.fftSize = 1024;
+      const destino = ac.createMediaStreamDestination();
+      fuente.connect(g1); g1.connect(g2); g2.connect(pres); pres.connect(a1); a1.connect(comp); comp.connect(ganancia);
+      ganancia.connect(destino); ganancia.connect(an);
+      this.ac = ac; this.flujo = flujo; this.an = an; this.buf = new Float32Array(an.fftSize);
+      this.pista = destino.stream.getAudioTracks()[0];
+      this.inicioPista = Date.now(); this.textosConPista = 0; this.conSonido = 0;
+      return this.pista;
+    }catch(e){ this.soltarPista(); this.pistaFalla = true; return null; }
+  },
+  soltarPista(){
+    try{ this.flujo && this.flujo.getTracks().forEach(t=>t.stop()); }catch(e){}
+    try{ this.ac && this.ac.close(); }catch(e){}
+    this.pista = null; this.flujo = null; this.ac = null; this.an = null;
+  },
+  // ¿Hay sonido fuerte en el micrófono filtrado? (solo se sabe con el filtro puesto)
+  haySonido(){
+    if (!this.an) return false;
+    this.an.getFloatTimeDomainData(this.buf);
+    let s = 0; for (let i=0;i<this.buf.length;i++) s += this.buf[i]*this.buf[i];
+    const fuerte = Math.sqrt(s / this.buf.length) > .03;
+    this.conSonido = fuerte ? this.conSonido + 1500 : 0;
+    return fuerte;
+  },
+  // Arranca un reconocedor: con la pista filtrada si se puede; si no, con el micrófono común.
+  iniciar(r){
+    if (this.pista && this.pista.readyState === "live" && !this.pistaFalla){
+      try{ r.start(this.pista); return; }
+      catch(e){ if (e && e.name === "TypeError"){ this.pistaFalla = true; ls.set("atril.sinFiltro", true); this.soltarPista(); } else return; }
+    }
+    try{ r.start(); }catch(e){}
   },
   encender(desdeGuardia){
     const SR = this.usarNativo();
     if (SR){
+      if (this._armando) return;
+      if (!this.pistaFalla && !(this.pista && this.pista.readyState === "live")){
+        this._armando = true;
+        this.armarPista().finally(()=>{ this._armando = false; if (this.quiere && !this.vivo) this.encender(desdeGuardia); });
+        if (!this.pistaFalla) return;
+      }
       if (!this.rec){
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
-        r.onstart = ()=>{ this.vivo = true; this.ui(); };
-        r.onresult = ev=>{ let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const t=ev.results[i][0].transcript; if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
+        if (this.local) { try{ r.processLocally = true; }catch(e){} }
+        r.onstart = ()=>{ this.vivo = true; this.ultimo = Date.now(); this.ui(); };
+        r.onresult = ev=>{ this.ultimo = Date.now(); if (this.pista) this.textosConPista++; this.conSonido = 0;
+          let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const t=ev.results[i][0].transcript; if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
-          if (ev.error==="not-allowed" || ev.error==="service-not-allowed"){ this.quiere=false; this.vivo=false; clearInterval(this.guardia); this.rec=null; this.ui(); sinMic(); }
-          // "no-speech", "aborted", "network": se vuelve a prender solo en onend
+          if ((ev.error==="not-allowed" || ev.error==="service-not-allowed") && !this.pista){ this.quiere=false; this.vivo=false; clearInterval(this.guardia); this.rec=null; this.soltarPista(); this.ui(); sinMic(); return; }
+          // Si el filtro no le gusta a este teléfono, se vuelve al micrófono común y se recuerda.
+          if (this.pista && ["audio-capture","not-allowed","service-not-allowed","bad-grammar","language-not-supported"].includes(ev.error)){
+            this.pistaFalla = true; ls.set("atril.sinFiltro", true); this.soltarPista(); setTimeout(()=>this.reiniciar(), 100); return;
+          }
+          // Cortes de internet repetidos: si el teléfono reconoce sin internet, se pasa a eso.
+          if (ev.error === "network"){ const ahora = Date.now(); this.errRed = this.errRed.filter(t=>ahora-t<60000); this.errRed.push(ahora); if (this.errRed.length >= 2) this.probarLocal(); }
+          if (this.local && ev.error === "language-not-supported"){ this.local = false; setTimeout(()=>this.reiniciar(), 100); }
+          // "no-speech", "aborted": se vuelve a prender solo en onend
         };
-        r.onend = ()=>{ this.vivo = false; if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo){ try{ r.start(); }catch(e){} } }, 50); };
-        this.rec = r;
+        r.onend = ()=>{ if (this.rec !== r) return; this.vivo = false; Oido.finParcial();
+          if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo && this.rec === r) this.iniciar(r); }, 50); };
+        this.rec = r; this.arranques++;
       }
-      try{ this.rec.start(); }catch(e){}
+      this.iniciar(this.rec);
       return;
     }
     if (this.dict){
@@ -976,11 +1073,24 @@ const Mic = {
     }
     this.quiere = false; this.ui(); sinMic();
   },
+  async probarLocal(){
+    if (this.local) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    try{ if (SR && SR.available && await SR.available({langs:[Ajustes.idioma], processLocally:true}) === "available"){ this.local = true; this.reiniciar(); } }catch(e){}
+  },
+  // Tira el reconocedor trabado y arma uno nuevo.
+  reiniciar(){
+    const viejo = this.rec; this.rec = null; this.vivo = false; this.ultimo = Date.now();
+    Oido.finParcial();
+    if (viejo){ viejo.onend = null; viejo.onresult = null; viejo.onerror = null; try{ viejo.abort(); }catch(e){} }
+    if (this.quiere) this.encender(true);
+  },
   // Un toque en la pantalla también lo reactiva si se había cortado.
   revivir(){ if (this.quiere && !this.vivo) this.encender(); },
   parar(){
     this.quiere = false; clearInterval(this.guardia); this.ui();
     if (this.rec){ try{ this.rec.stop(); }catch(e){} }
+    this.soltarPista();
     if (this.dict && this.vivo){ try{ this.dict.stop(); }catch(e){} }
     this.vivo = false;
   }
