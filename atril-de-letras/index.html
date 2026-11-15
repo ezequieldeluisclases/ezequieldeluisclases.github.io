@@ -35,6 +35,13 @@
   .cancion .t{flex:1;font-size:18px;font-weight:600;min-width:0}
   .cancion .s{color:var(--dim);font-size:13px;font-weight:400;display:block;margin-top:2px}
   .cancion button{padding:10px 12px}
+  .repLista{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .repLista button{padding:8px 12px;font-size:14px;border-radius:999px;text-align:left}
+  .repLista button small{opacity:.65;font-size:12px}
+  .ordenFila{display:none;align-items:center;gap:8px;margin:0 0 10px;font-size:13px;color:var(--muted,#8a8172)}
+  .ordenFila.on{display:flex}
+  .ordenFila button{padding:6px 12px;font-size:13px;border-radius:999px}
+  .ordenFila button.sel{background:var(--acc,#e0a040);color:#1a1208;border-color:transparent;font-weight:600}
   .vacio{color:var(--dim);text-align:center;padding:40px 10px;line-height:1.5}
   .ayuda{color:var(--dim);font-size:14px;line-height:1.5;margin:0}
   .fila{display:flex;gap:10px;flex-wrap:wrap}
@@ -116,8 +123,18 @@
       <div><b>Instalala como aplicación</b><br><span id="instalarTxt">Así se abre sola, a pantalla completa, sin la barra de Chrome.</span></div>
       <button class="pri" id="btnInstalar">Instalar</button>
     </div>
+    <div class="ordenFila" id="ordenFila">
+      <span>Orden:</span>
+      <button id="ordAZ">A–Z</button>
+      <button id="ordMio">A mi gusto</button>
+    </div>
     <div id="canciones"></div>
     <div class="aviso" id="avisoGuardado"></div>
+    <div class="buscar" id="repertorio">
+      <div class="rot">Repertorio para cargar</div>
+      <p class="ayuda">Canciones de tu repertorio que todavía no están en el Atril. Tocá una: se abre con el título listo y el botón para buscar la letra con acordes en Cifra Club.</p>
+      <div id="repLista" class="repLista"></div>
+    </div>
     <div class="buscar">
       <div class="rot">Copia de seguridad</div>
       <p class="ayuda">Las canciones quedan en este teléfono. Guardá una copia de vez en cuando, o para pasarlas a otro teléfono.</p>
@@ -396,8 +413,32 @@ function avisar(t){ $("#avisoGuardado").textContent = t; }
 
 /* ---------- vistas ---------- */
 function mostrar(id){ document.querySelectorAll(".vista").forEach(v=>v.classList.toggle("on", v.id===id)); }
+// Orden de la lista: alfabético por defecto; "a mi gusto" respeta el orden que él arme con las flechas.
+let ordenLista = ls.get("atril.ordenLista", "az");
+function ordenarCanciones(){
+  if (ordenLista === "az") Store.songs.sort((a,b)=>(a.titulo||"").localeCompare(b.titulo||"", "es", {sensitivity:"base", numeric:true}));
+  else Store.songs.sort((a,b)=>(a.orden||0)-(b.orden||0));
+}
+async function cambiarOrden(modo){
+  if (modo === ordenLista) return;
+  if (modo === "mio"){
+    // Arranca "a mi gusto" desde el orden que está viendo, para no desordenarle la lista.
+    ordenarCanciones();
+    const cambios = [];
+    Store.songs.forEach((s,i)=>{ if (s.orden !== i){ s.orden = i; cambios.push(s); } });
+    ordenLista = modo; ls.set("atril.ordenLista", modo); pintarLista();
+    for (const s of cambios) await Store.guardar(s);
+    return;
+  }
+  ordenLista = modo; ls.set("atril.ordenLista", modo); pintarLista();
+}
 function pintarLista(){
+  ordenarCanciones();
+  $("#ordenFila").classList.toggle("on", Store.songs.length >= 2);
+  $("#ordAZ").classList.toggle("sel", ordenLista === "az");
+  $("#ordMio").classList.toggle("sel", ordenLista === "mio");
   const box = $("#canciones");
+  try{ pintarRepertorio(); }catch(e){}
   if (!Store.songs.length){
     box.innerHTML = '<div class="vacio">Todavía no hay canciones.<br>Tocá <b>+ Canción</b>, buscala en Cifra Club o pegá la letra, y listo.</div>';
   } else {
@@ -407,24 +448,58 @@ function pintarLista(){
       const det = [s.artista, `${n} estrofa${n===1?"":"s"}`, conAc ? "con acordes" : ""].filter(Boolean).join(" · ");
       return `<div class="cancion" data-id="${s.id}">
         <div class="t">${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
-        <button data-acc="sub" aria-label="Subir">↑</button>
+        ${ordenLista === "mio" ? '<button data-acc="sub" aria-label="Subir">↑</button><button data-acc="baj" aria-label="Bajar">↓</button>' : ''}
         <button data-acc="edit">Editar</button>
         <button class="pri" data-acc="tocar">Cantar</button></div>`;
     }).join("");
   }
   avisar(Store.modo==="nube" ? "Tus canciones se guardan en tu cuenta." : "Tus canciones se guardan en este teléfono.");
 }
+$("#ordAZ").onclick = ()=>cambiarOrden("az");
+$("#ordMio").onclick = ()=>cambiarOrden("mio");
 $("#canciones").addEventListener("click", async e=>{
   const b = e.target.closest("button"); if (!b) return;
   const id = b.closest(".cancion").dataset.id;
   const idx = Store.songs.findIndex(s=>s.id===id);
   if (b.dataset.acc==="edit") abrirEditor(Store.songs[idx]);
   if (b.dataset.acc==="tocar") abrirEscena(idx);
-  if (b.dataset.acc==="sub" && idx>0){
-    const a = Store.songs[idx-1], c = Store.songs[idx];
-    a.orden = idx; c.orden = idx-1; Store.songs[idx-1]=c; Store.songs[idx]=a;
+  const mover = async (j)=>{
+    if (j < 0 || j >= Store.songs.length) return;
+    const a = Store.songs[j], c = Store.songs[idx];
+    a.orden = idx; c.orden = j; Store.songs[j]=c; Store.songs[idx]=a;
     pintarLista(); await Store.guardar(c); await Store.guardar(a);
-  }
+  };
+  if (b.dataset.acc==="sub") await mover(idx-1);
+  if (b.dataset.acc==="baj") await mover(idx+1);
+});
+
+// Repertorio sugerido: solo títulos (las letras las trae él desde Cifra Club o desde sus archivos).
+const REPERTORIO = [
+  ["Zamba de mi esperanza", ""], ["Al jardín de la República", ""], ["Añoranzas", ""],
+  ["Bajo la sombra de un árbol", ""], ["De fiesta en fiesta", "Mercedes Sosa"], ["Domingos santiagueños", ""],
+  ["Déjame que me vaya", ""], ["El humahuaqueño", ""], ["Gatito e' las penas", ""], ["Jangadero", ""],
+  ["La Oma", ""], ["La pucha con el hombre", ""], ["La sachapera", ""], ["La Villerita", "Horacio Guarany"],
+  ["Lindo adorno pa' mi apero", ""], ["Padecer", "El Negro Palma"], ["Para cantar he nacido", "Horacio Banegas"],
+  ["Pedro Canoero", "Teresa Parodi"], ["Perfume de carnaval", ""], ["Puente carretero", ""], ["Quena rota", ""],
+  ["Recuerdo salteño", "Los Fronterizos"], ["Salamanqueando pa' mi", ""], ["Viva Jujuy", ""],
+  ["Zamba para no morir", ""], ["Zamba para olvidar", ""], ["Zamba de usted", ""], ["A pique", ""],
+  ["Canción del jardinero", "María Elena Walsh"], ["Canción para bañar la luna", "María Elena Walsh"],
+  ["Bailecito para iluminar", "José Luis Aguirre"], ["Vienes y te vas", "Los Tekis"],
+  ["Acuarela del río", ""], ["Estación Villa Calzada", ""], ["Sulky", "Gustavo Cerati"]
+];
+const sinTildes = t => (t||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/gi," ").trim().toLowerCase();
+function pintarRepertorio(){
+  const tengo = new Set(Store.songs.map(s=>sinTildes(s.titulo)));
+  const faltan = REPERTORIO.filter(([t])=>!tengo.has(sinTildes(t)))
+    .sort((a,b)=>a[0].localeCompare(b[0], "es", {sensitivity:"base"}));
+  $("#repertorio").style.display = faltan.length ? "" : "none";
+  $("#repLista").innerHTML = faltan.map(([t,a])=>`<button data-t="${esc(t)}" data-a="${esc(a)}">${esc(t)}${a ? ` <small>${esc(a)}</small>` : ""}</button>`).join("");
+}
+$("#repLista").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if (!b) return;
+  abrirEditor(null);
+  $("#inTitulo").value = b.dataset.t; $("#inArtista").value = b.dataset.a;
+  actualizarBusqueda();
 });
 
 /* ---------- editor ---------- */
@@ -452,7 +527,7 @@ async function guardarEditor(){
   const artista = $("#inArtista").value.trim();
   const letra = $("#inLetra").value.replace(/\r/g,"").replace(/^\s*\n|\s+$/g,"");
   if (!letra.trim()){ $("#inLetra").focus(); return null; }
-  const s = editando ? {...editando, titulo, artista, letra} : {id:uid(), titulo, artista, letra, tono:0, orden:Store.songs.length};
+  const s = editando ? {...editando, titulo, artista, letra} : {id:uid(), titulo, artista, letra, tono:0, orden: Store.songs.reduce((m,x)=>Math.max(m, x.orden||0), -1) + 1};
   await Store.guardar(s); return s;
 }
 $("#btnNueva").onclick = ()=>abrirEditor(null);
@@ -498,8 +573,9 @@ async function zipLeer(buf, nombre){
 }
 function textoDeXml(xml, P, T, TAB, BR, ESP){
   const doc = new DOMParser().parseFromString(xml, "application/xml");
-  const lineas = [];
-  for (const par of doc.getElementsByTagName(P)){
+  const odt = P === "text:p";
+  const TBL = odt ? "table:table" : "w:tbl", TR = odt ? "table:table-row" : "w:tr", TC = odt ? "table:table-cell" : "w:tc";
+  const textoPar = par => {
     let t = "";
     const recorrer = nodo => { for (const h of nodo.childNodes){
       if (h.nodeType === 3){ if (ESP) t += h.nodeValue; continue; }
@@ -510,8 +586,34 @@ function textoDeXml(xml, P, T, TAB, BR, ESP){
       else if (ESP && h.tagName === ESP) t += " ".repeat(+(h.getAttribute("text:c")||1));
       else if (h.tagName !== P) recorrer(h);
     } };
-    recorrer(par); lineas.push(t);
-  }
+    recorrer(par); return t;
+  };
+  const lineas = [];
+  // Recorre el documento en orden. Una tabla (letra en dos columnas armada con tabla)
+  // se lee columna por columna: toda la columna izquierda y después la derecha.
+  const recorrerBloque = nodo => {
+    for (const h of nodo.childNodes){
+      if (h.nodeType !== 1) continue;
+      if (h.tagName === P) lineas.push(textoPar(h));
+      else if (h.tagName === TBL){
+        const cols = [];
+        const filas = [...h.getElementsByTagName(TR)].filter(tr => tr.closest ? tr.closest(TBL) === h : true);
+        for (const tr of filas){
+          let ci = 0;
+          for (const tc of tr.childNodes){
+            if (tc.nodeType !== 1 || tc.tagName !== TC) continue;
+            const guardar = lineas.length; recorrerBloque(tc);
+            const dentro = lineas.splice(guardar);
+            (cols[ci] = cols[ci] || []).push(...dentro, "");
+            ci++;
+          }
+        }
+        for (const c of cols) if (c) lineas.push(...c, "");
+      }
+      else recorrerBloque(h);
+    }
+  };
+  recorrerBloque(doc.documentElement);
   return lineas.join("\n");
 }
 let pdfjsListo = null;
@@ -526,42 +628,147 @@ function cargarPdfJs(){
   });
   return pdfjsListo;
 }
+// Arma las líneas de texto de un grupo de piezas del PDF, respetando la posición de los acordes.
+function lineasDePdf(items, ch){
+  const filas = [];
+  for (const it of items){
+    let f = filas.find(r=>Math.abs(r.y - it.y) < it.h*0.45);
+    if (!f){ f = {y: it.y, h: it.h, items:[]}; filas.push(f); }
+    f.items.push(it);
+  }
+  filas.sort((a,b)=>b.y - a.y);
+  if (!filas.length) return [];
+  const minX = Math.min(...filas.flatMap(r=>r.items.map(i=>i.x)));
+  const hTip = filas.map(r=>r.h).sort((a,b)=>a-b)[Math.floor(filas.length/2)] || 10;
+  const salida = []; let yAnt = null;
+  for (const r of filas){
+    if (yAnt !== null && (yAnt - r.y) > hTip * 2.1) salida.push("");
+    r.items.sort((a,b)=>a.x - b.x);
+    let linea = "";
+    for (const it of r.items){
+      const col = Math.round((it.x - minX) / ch);
+      if (col > linea.length) linea = linea.padEnd(col, " ");
+      else if (linea && !linea.endsWith(" ") && !it.s.startsWith(" ")) linea += " ";
+      linea += it.s;
+    }
+    salida.push(linea.replace(/\s+$/,""));
+    yAnt = r.y;
+  }
+  return salida;
+}
+// Busca un hueco vertical (sin texto) en la parte media de la página: si de los dos lados
+// hay letra, la página está en dos columnas.
+function corteDeColumnas(items, ancho, ch){
+  const desde = ancho * 0.25, hasta = ancho * 0.75;
+  const tramos = items.map(i=>[i.x, i.x + Math.max(i.w, i.s.length*ch*0.5)]).sort((a,b)=>a[0]-b[0]);
+  let mejor = null, fin = -Infinity;
+  for (const [a,b] of tramos){
+    if (a > fin){
+      const ini = Math.max(fin, desde), ter = Math.min(a, hasta);
+      if (fin > -Infinity && ter - ini >= ch*3 && (!mejor || ter-ini > mejor.ter-mejor.ini)) mejor = {ini, ter};
+    }
+    fin = Math.max(fin, b);
+  }
+  if (!mejor) return null;
+  const x = (mejor.ini + mejor.ter) / 2;
+  const izq = items.filter(i=>i.x < x), der = items.filter(i=>i.x >= x);
+  const filasDe = arr => new Set(arr.map(i=>Math.round(i.y))).size;
+  const letras = arr => arr.reduce((n,i)=>n + i.s.replace(/\s/g,"").length, 0);
+  if (filasDe(izq) < 4 || filasDe(der) < 4) return null;
+  if (letras(der) < letras(izq) * 0.15 || letras(izq) < letras(der) * 0.15) return null;
+  return x;
+}
+function separarColumnas(items, ancho, ch){
+  // renglones
+  const filas = [];
+  for (const it of [...items].sort((a,b)=>b.y-a.y)){
+    let f = filas.find(r=>Math.abs(r.y - it.y) < it.h*0.45);
+    if (!f){ f = {y: it.y, items:[]}; filas.push(f); }
+    f.items.push(it);
+  }
+  filas.sort((a,b)=>b.y - a.y);
+  const n = filas.length; if (n < 8) return null;
+  const fin = it => it.x + Math.max(it.w, it.s.trim().length*ch*0.5);
+  let mejor = null;
+  for (let x = ancho*0.25; x <= ancho*0.75; x += ch){
+    // un renglón "cruza" si algo pasa por encima del corte (con un margen)
+    const cruza = filas.map(r=>r.items.some(it=>it.x < x + ch*0.5 && fin(it) > x - ch*0.5));
+    let a = 0; while (a < n && cruza[a]) a++;
+    let b = n - 1; while (b >= a && cruza[b]) b--;
+    if (b - a + 1 < 8 || b - a + 1 < n*0.55) continue;   // las columnas tienen que ser la mayor parte de la página
+    // se toleran uno o dos renglones que rozan el corte (una línea larga), no más
+    let roces = 0; for (let k=a;k<=b;k++) if (cruza[k]) roces++;
+    if (roces > Math.max(1, (b-a+1)*0.08)) continue;
+    const cuerpo = filas.slice(a, b+1).flatMap(r=>r.items);
+    const izq = cuerpo.filter(i=>i.x < x), der = cuerpo.filter(i=>i.x >= x);
+    const filasDe = arr => new Set(arr.map(i=>Math.round(i.y))).size;
+    const letras = arr => arr.reduce((t,i)=>t + i.s.replace(/\s/g,"").length, 0);
+    if (filasDe(izq) < 4 || filasDe(der) < 4) continue;
+    if (letras(der) < letras(izq)*0.2 || letras(izq) < letras(der)*0.2) continue;
+    // Cada lado tiene que tener renglones de letra propios (varias palabras), no solo acordes sueltos,
+    // y la columna derecha tiene que empezar alineada (así se distingue de acordes corridos a la derecha).
+    const renglonesLetra = arr => {
+      const porFila = new Map();
+      for (const i of arr){ const k = Math.round(i.y); porFila.set(k, (porFila.get(k)||[]).concat(i)); }
+      return [...porFila.values()].filter(f => f.map(i=>i.s).join(" ").trim().split(/\s+/).filter(w=>/[a-záéíóúñ]{2,}/i.test(w)).length >= 3);
+    };
+    const letraIzq = renglonesLetra(izq), letraDer = renglonesLetra(der);
+    if (letraIzq.length < 3 || letraDer.length < 3) continue;
+    const inicios = letraDer.map(f=>Math.min(...f.map(i=>i.x))).sort((p,q)=>p-q);
+    const med = inicios[Math.floor(inicios.length/2)];
+    if (inicios.filter(v=>Math.abs(v-med) <= ch*3).length < inicios.length*0.5) continue;
+    // el hueco: distancia libre alrededor del corte en el cuerpo
+    const finIzq = Math.max(...izq.map(fin)), iniDer = Math.min(...der.map(i=>i.x));
+    const hueco = iniDer - finIzq;
+
+    const puntaje = (b - a + 1) * 1000 - roces * 5000 + hueco;
+    if (!mejor || puntaje > mejor.puntaje) mejor = {puntaje, x, a, b};
+  }
+  if (!mejor) return null;
+  const cabeza = filas.slice(0, mejor.a).flatMap(r=>r.items);
+  const cuerpo = filas.slice(mejor.a, mejor.b+1).flatMap(r=>r.items);
+  const pie = filas.slice(mejor.b+1).flatMap(r=>r.items);
+  // corte en el medio del hueco real
+  const izq = cuerpo.filter(i=>i.x < mejor.x), der = cuerpo.filter(i=>i.x >= mejor.x);
+  const finIzq = Math.max(...izq.map(fin)), iniDer = Math.min(...der.map(i=>i.x));
+  const x = iniDer > finIzq ? (finIzq + iniDer)/2 : mejor.x;
+  return {x, cabeza, cuerpo, pie};
+}
 async function textoDePdf(buf){
   const pdfjs = await cargarPdfJs();
   const pdf = await pdfjs.getDocument({data: buf}).promise;
   const salida = [];
   for (let n = 1; n <= pdf.numPages; n++){
     const pag = await pdf.getPage(n);
+    const ancho = pag.getViewport({scale:1}).width;
     const tc = await pag.getTextContent();
-    const items = tc.items.filter(i=>i.str !== undefined && i.str.length);
-    if (!items.length) continue;
+    const crudos = tc.items.filter(i=>i.str !== undefined && i.str.length);
+    if (!crudos.length) continue;
     // ancho de una letra, para respetar la posición de los acordes sobre la letra
-    let anchos = items.filter(i=>i.str.trim().length>1 && i.width>0).map(i=>i.width/i.str.length).sort((a,b)=>a-b);
+    let anchos = crudos.filter(i=>i.str.trim().length>1 && i.width>0).map(i=>i.width/i.str.length).sort((a,b)=>a-b);
     const ch = anchos.length ? anchos[Math.floor(anchos.length/2)] : 5;
-    const filas = [];
-    for (const it of items){
-      const x = it.transform[4], y = it.transform[5], h = Math.abs(it.transform[3]) || 10;
-      let f = filas.find(r=>Math.abs(r.y - y) < h*0.45);
-      if (!f){ f = {y, h, items:[]}; filas.push(f); }
-      f.items.push({x, s:it.str});
-    }
-    filas.sort((a,b)=>b.y - a.y);
-    const minX = Math.min(...filas.flatMap(r=>r.items.map(i=>i.x)));
-    let yAnt = null, hTip = filas.map(r=>r.h).sort((a,b)=>a-b)[Math.floor(filas.length/2)] || 10;
-    for (const r of filas){
-      if (yAnt !== null && (yAnt - r.y) > hTip * 2.1) salida.push("");
-      r.items.sort((a,b)=>a.x - b.x);
-      let linea = "";
-      for (const it of r.items){
-        const col = Math.round((it.x - minX) / ch);
-        if (col > linea.length) linea = linea.padEnd(col, " ");
-        else if (linea && !linea.endsWith(" ") && !it.s.startsWith(" ")) linea += " ";
-        linea += it.s;
+    const items = [];
+    for (const it of crudos){
+      const x0 = it.transform[4], y = it.transform[5], h = Math.abs(it.transform[3]) || 10, w = it.width || 0, s = it.str;
+      if (!s.replace(/[\s\u200b\u200c\u200d\ufeff]/g,"")) continue;   // espacios sueltos: no son texto (y tapaban el hueco entre columnas)
+      // Columnas armadas con espacios: un mismo renglón trae las dos columnas juntas. Se separa en los huecos largos.
+      const partes = s.split(/( {4,})/);
+      if (partes.length === 1 || !w){ items.push({x:x0, y, h, w, s}); continue; }
+      const porLetra = w / s.length; let pos = 0;
+      for (const pt of partes){
+        if (pt.trim()) items.push({x: x0 + pos*porLetra, y, h, w: pt.length*porLetra, s: pt});
+        pos += pt.length;
       }
-      salida.push(linea.replace(/\s+$/,""));
-      yAnt = r.y;
     }
-    salida.push("");
+    // ¿Está en dos columnas? Busca un hueco vertical en el medio. Lo que cruza todo el ancho
+    // arriba (título, intro) o abajo (diagramas de acordes, pie) va antes y después de las columnas.
+    const sep = separarColumnas(items, ancho, ch);
+    let x = sep ? sep.x : null, cabeza = sep ? sep.cabeza : [], cuerpo = sep ? sep.cuerpo : items, pie = sep ? sep.pie : [];
+    if (x === null){ salida.push(...lineasDePdf(items, ch), ""); continue; }
+    if (cabeza.length) salida.push(...lineasDePdf(cabeza, ch), "");
+    salida.push(...lineasDePdf(cuerpo.filter(i=>i.x < x), ch), "");
+    salida.push(...lineasDePdf(cuerpo.filter(i=>i.x >= x), ch), "");
+    if (pie.length) salida.push(...lineasDePdf(pie, ch), "");
   }
   return salida.join("\n");
 }
