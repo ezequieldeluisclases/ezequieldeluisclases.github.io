@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#000000">
+<title>Atril Escenario</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icono-192.png">
+<link rel="apple-touch-icon" href="icono-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#000; --panel:#111; --line:#222; --txt:#fff; --dim:#8a8a8a;
+  --cur:#00e5ff; --chord:#ffb35c; --accent:#ffd400;
+  --fs:30px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+  font-family:"Atkinson Hyperlegible",system-ui,sans-serif}
+button{font:inherit;color:inherit;background:#1c1c1c;border:1px solid #333;border-radius:12px;
+  padding:10px 14px;cursor:pointer}
+button:active{transform:scale(.97)}
+button.pri{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+.view{display:none;height:100%;flex-direction:column}
+.view.on{display:flex}
+header{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+header h1{font-size:20px;margin:0;flex:1}
+.credit{font-size:11px;color:#555;text-align:center;padding:8px}
+
+/* ---------- Biblioteca ---------- */
+#lista{flex:1;overflow:auto;padding:8px 12px}
+.item{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+.item .t{flex:1;cursor:pointer}
+.item .t b{display:block;font-size:19px}
+.item .t span{color:var(--dim);font-size:14px}
+.item button{padding:8px 10px;font-size:13px}
+
+/* ---------- Editor ---------- */
+#editor .body{flex:1;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
+#editor input,#editor textarea{width:100%;background:#0d0d0d;color:#fff;border:1px solid #333;
+  border-radius:10px;padding:10px;font:16px/1.4 ui-monospace,Menlo,Consolas,monospace}
+#editor textarea{flex:1;min-height:280px;white-space:pre;overflow:auto}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row>*{flex:1}
+.hint{color:var(--dim);font-size:13px;line-height:1.4}
+
+/* ---------- Canción (renderizado común) ---------- */
+.ln{display:flex;flex-wrap:wrap;align-items:flex-end;line-height:1.15;margin:0}
+.w{display:inline-flex;align-items:flex-end;white-space:nowrap}
+.seg{display:inline-flex;flex-direction:column;white-space:pre}
+.seg .c{color:var(--chord);font-weight:700;font-size:.72em;min-height:1.15em;padding-right:.35em}
+.seg .l{min-height:1.15em}
+.ln.inst .seg .l{display:none}
+.ln.inst .seg .c{padding-right:1em}
+.nochords .seg .c{display:none}
+.blk{margin-bottom:1.1em}
+
+/* ---------- Atril (escenario) ---------- */
+#stage{position:relative}
+#scroll{flex:1;overflow:auto;padding:30vh 22px 60vh;font-size:var(--fs);scroll-behavior:smooth}
+#scroll .ln{transition:opacity .25s,color .25s,font-size .25s;padding:.08em 0 .08em .45em;border-left:4px solid transparent;cursor:pointer}
+#scroll .ln.past{opacity:.3;font-size:.85em}
+#scroll .ln.rest{opacity:.5}
+#scroll .ln.next{opacity:1;color:#fff}
+#scroll .ln.cur{color:var(--cur);border-left-color:var(--cur);font-weight:700}
+#scroll .ln.cur .seg .c{color:var(--chord)}
+#topbar{position:absolute;top:0;left:0;right:0;display:flex;gap:8px;align-items:center;
+  padding:10px 12px;background:linear-gradient(#000 70%,transparent);z-index:2}
+#topbar .ti{flex:1;min-width:0}
+#topbar .ti b{display:block;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#topbar .ti span{font-size:13px;color:var(--dim)}
+#controls{position:absolute;left:0;right:0;bottom:0;padding:10px 12px 14px;z-index:2;
+  background:linear-gradient(transparent,#000 35%);display:flex;flex-direction:column;gap:8px}
+#controls .row button{padding:12px 6px;font-size:15px}
+#mic{font-size:17px!important;font-weight:700}
+#mic.on{background:#062b31;border-color:var(--cur);color:var(--cur)}
+#oido{font-size:13px;color:var(--dim);min-height:1.3em;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#aviso{display:none;position:absolute;top:64px;left:12px;right:12px;z-index:3;background:#2a1600;
+  border:1px solid #ff8a00;color:#ffd7a8;border-radius:12px;padding:12px;font-size:14px;line-height:1.4}
+.hide-ui #topbar,.hide-ui #controls{opacity:0;pointer-events:none}
+#topbar,#controls{transition:opacity .3s}
+
+/* ---------- Vista A4 ---------- */
+#a4wrap{flex:1;overflow:auto;background:#333;padding:16px;display:flex;justify-content:center}
+#a4holder{position:relative}
+.a4{width:794px;height:1123px;background:#fff;color:#000;padding:56px 60px;overflow:hidden;
+  transform-origin:top left;font-family:"Atkinson Hyperlegible",Arial,sans-serif}
+.a4 h2{margin:0;font-size:30px;line-height:1.1}
+.a4 .meta{color:#555;font-size:15px;margin:4px 0 20px;border-bottom:2px solid #000;padding-bottom:10px}
+.a4 .meta .k{float:right;font-weight:700;color:#000}
+.a4 .cuerpo{--c:#b34700}
+.a4 .seg .c{color:#b34700}
+.a4 .cuerpo.dos{column-count:2;column-gap:36px;column-rule:1px solid #ddd}
+.a4 .blk{break-inside:avoid}
+.a4 .pie{position:absolute;bottom:22px;right:60px;font-size:10px;color:#999}
+.a4 .lienzo{position:relative;height:100%}
+@media print{
+  @page{size:A4;margin:0}
+  body{background:#fff}
+  .view{display:none!important}
+  #a4view{display:block!important}
+  #a4view header,#a4view .credit,#a4view .barra{display:none!important}
+  #a4wrap{padding:0;background:#fff;overflow:visible}
+  .a4{transform:none!important}
+  #a4holder{width:auto!important;height:auto!important}
+}
+</style>
+</head>
+<body>
+
+<!-- ===================== BIBLIOTECA ===================== -->
+<section class="view on" id="biblio">
+  <header>
+    <h1>Atril Escenario</h1>
+    <button class="pri" id="btnNueva">+ Agregar</button>
+  </header>
+  <div id="lista"></div>
+  <div class="credit">creado por Ezequiel de Luis</div>
+</section>
+
+<!-- ===================== EDITOR / IMPORTAR ===================== -->
+<section class="view" id="editor">
+  <header>
+    <button id="edVolver">‹</button>
+    <h1 id="edTit">Agregar canción</h1>
+    <button class="pri" id="edGuardar">Guardar</button>
+  </header>
+  <div class="body">
+    <div class="row">
+      <input id="edTitulo" placeholder="Título">
+      <input id="edArtista" placeholder="Artista">
+    </div>
+    <div class="row">
+      <input id="edTono" placeholder="Tono (ej. Am)">
+      <button id="edArchivo">Abrir archivo .txt / .cho</button>
+      <input type="file" id="edFile" accept=".txt,.cho,.pro,.chopro,.chordpro,text/plain" hidden>
+    </div>
+    <p class="hint">Pegá la canción como venga: acordes arriba de la letra (como en Cifra Club) o ChordPro con [acordes] adentro. Al guardar se convierte sola a ChordPro, se sacan las etiquetas tipo "Estribillo" o "Intro" y cada acorde queda pegado a su sílaba.</p>
+    <textarea id="edTexto" spellcheck="false" placeholder="Am            G&#10;Por el camino de tierra&#10;F                 E&#10;baja el viento del cerro"></textarea>
+    <div class="row">
+      <button id="edConvertir">Ver cómo queda en ChordPro</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== ATRIL ===================== -->
+<section class="view" id="stage">
+  <div id="topbar">
+    <button id="stVolver">‹</button>
+    <div class="ti"><b id="stTitulo"></b><span id="stMeta"></span></div>
+    <button id="stA4">A4</button>
+  </div>
+  <div id="aviso"></div>
+  <div id="scroll"></div>
+  <div id="controls">
+    <div id="oido"></div>
+    <div class="row">
+      <button id="prev">◀</button>
+      <button id="mic">🎤 Escuchar</button>
+      <button id="next">▶</button>
+    </div>
+    <div class="row">
+      <button id="fsMenos">A−</button>
+      <button id="fsMas">A+</button>
+      <button id="trMenos">♭ −½</button>
+      <button id="trMas">♯ +½</button>
+      <button id="acordes">Acordes</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== A4 ===================== -->
+<section class="view" id="a4view">
+  <header>
+    <button id="a4Volver">‹</button>
+    <h1>A4</h1>
+    <button id="a4Copiar">Copiar</button>
+    <button class="pri" id="a4Imprimir">PDF</button>
+  </header>
+  <div id="a4wrap"><div id="a4holder"><div class="a4" id="a4">
+    <div class="lienzo">
+      <h2 id="a4T"></h2>
+      <div class="meta"><span class="k" id="a4K"></span><span id="a4A"></span></div>
+      <div class="cuerpo" id="a4C"></div>
+    </div>
+    <div class="pie">Atril Escenario · creado por Ezequiel de Luis</div>
+  </div></div></div>
+  <div class="credit" id="a4Info"></div>
+</section>
+
+<script>
+/* =========================================================
+   DATOS
+   ========================================================= */
+const DEMO = {
+  id:'demo', title:'Camino de tierra', artist:'Canción de prueba', key:'Am',
+  cho:`[Am]Por el camino de [G]tierra
+[F]baja el viento del [E]cerro
+[Am]trae la voz de mi [G]gente
+[F]y el eco de los ter[E]ceros
+
+[C]Canta, canta, compa[G]ñero
+[Am]que la noche es muy [E]larga
+[F]con la copla y el cha[G]rango
+[Am]se nos hace corta el [E]alba [Am]
+
+{inst: Am G F E}
+
+[Am]Pasa la luna en el [G]agua
+[F]como un farol que se [E]aleja
+[Am]y en la ronda de la [G]plaza
+[F]queda la luz de una [E]vela
+
+[C]Canta, canta, compa[G]ñero
+[Am]que la noche es muy [E]larga
+[F]con la copla y el cha[G]rango
+[Am]se nos hace corta el [E]alba [Am]`
+};
+
+let songs = [];
+function cargar(){
+  try{ songs = JSON.parse(localStorage.getItem('escenario.songs')||'[]'); }catch(e){ songs=[]; }
+  if(!songs.find(s=>s.id==='demo')) songs.unshift(DEMO);
+}
+function guardarTodo(){ try{ localStorage.setItem('escenario.songs', JSON.stringify(songs)); }catch(e){} }
+
+/* =========================================================
+   ACORDES: reconocimiento y transposición
+   ========================================================= */
+const CHORD_RE = /^\(?[A-G](?:#|b)?(?:maj|min|dim|aug|sus|add|m|M|°|º|\+|-)?(?:\d{1,2})?(?:(?:maj|sus|add|b|#|\+|-)\d{1,2})*(?:\/[A-G](?:#|b)?)?\)?$/;
+const IGNORABLE = /^(\||x\d+|\d+x|-+|%|\.+|\/)$/i;
+function esAcorde(t){ return CHORD_RE.test(t); }
+function esLineaAcordes(line){
+  const toks = line.trim().split(/\s+/).filter(Boolean);
+  if(!toks.length) return false;
+  let n=0;
+  for(const t of toks){ if(esAcorde(t)) n++; else if(!IGNORABLE.test(t)) return false; }
+  return n>0;
+}
+const SOST=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const BEM =['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+function idx(n){ let i=SOST.indexOf(n); if(i<0) i=BEM.indexOf(n); return i; }
+function transpNota(n, st, usarBem){
+  const i=idx(n); if(i<0) return n;
+  const j=((i+st)%12+12)%12;
+  return (usarBem?BEM:SOST)[j];
+}
+function transponer(ch, st, usarBem){
+  if(!st) return ch;
+  return ch.replace(/([A-G](?:#|b)?)/g,(m, n, off)=>{
+    // sólo raíz y bajo (después de "/"), no la "b" de extensiones
+    if(off===0 || ch[off-1]==='/' || ch[off-1]==='(') return transpNota(n, st, usarBem);
+    return m;
+  });
+}
+function prefiereBemoles(cho){
+  const ch = (cho.match(/\[([^\]]+)\]/g)||[]).join(' ');
+  const b=(ch.match(/[A-G]b/g)||[]).length, s=(ch.match(/[A-G]#/g)||[]).length;
+  return b>s;
+}
+
+/* =========================================================
+   IMPORTAR: texto libre (acordes arriba) -> ChordPro
+   ========================================================= */
+const ETIQUETA = /^\s*[\[\(\{]?\s*(intro|introducci[oó]n|estrofa|verso|estribillo|coro|puente|interludio|solo|final|outro|pre-?coro|pre-?estribillo|instrumental|riff|parte\s*\w*|tab|tabs|bis|repite|repetir|primera\s+parte|segunda\s+parte)\s*\d*\s*[\]\)\}]?\s*(?:[:\-–]\s*(.*))?$/i;
+
+function aChordPro(txt){
+  const out=[]; let meta={};
+  const L = txt.replace(/\r/g,'').replace(/\t/g,'    ').split('\n');
+  for(let i=0;i<L.length;i++){
+    let line=L[i];
+    const dir = line.match(/^\s*\{\s*(title|t|artist|a|key|subtitle|st)\s*:\s*(.*?)\s*\}\s*$/i);
+    if(dir){ const k=dir[1].toLowerCase(); meta[{t:'title',a:'artist',st:'artist',subtitle:'artist'}[k]||k]=dir[2]; continue; }
+    if(/^\s*\{[^}]*\}\s*$/.test(line) && !/^\s*\{\s*inst\s*:/i.test(line)) continue; // {soc}, {comment}, etc.
+    // Etiquetas de sección (se eliminan; si traen acordes, quedan como instrumental)
+    const et = line.match(ETIQUETA);
+    if(et){
+      const resto=(et[2]||'').trim();
+      if(resto && esLineaAcordes(resto)) out.push('{inst: '+resto.split(/\s+/).join(' ')+'}');
+      continue;
+    }
+    // ¿Ya es ChordPro? Se quitan corchetes que no sean acordes
+    if(/\[[^\]]+\]/.test(line)){
+      const l2=line.replace(/\[([^\]]*)\]/g,(m,c)=>esAcorde(c.trim())?'['+c.trim()+']':'').trimEnd();
+      if(l2.trim()) out.push(l2);
+      continue;
+    }
+    if(esLineaAcordes(line)){
+      const sig = L[i+1];
+      if(sig!==undefined && sig.trim() && !esLineaAcordes(sig) && !ETIQUETA.test(sig)){
+        out.push(fusionar(line, sig)); i++;
+      } else {
+        out.push('{inst: '+line.trim().split(/\s+/).filter(esAcorde).join(' ')+'}');
+      }
+      continue;
+    }
+    out.push(line.trimEnd());
+  }
+  // limpiar líneas vacías repetidas
+  const limpio = out.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+  return {cho:limpio, meta};
+}
+function fusionar(chLine, lyr){
+  const pos=[]; const re=/\S+/g; let m;
+  while((m=re.exec(chLine))){ if(esAcorde(m[0])) pos.push([m.index, m[0]]); }
+  let s = lyr;
+  for(let k=pos.length-1;k>=0;k--){
+    let [p,c]=pos[k];
+    if(p>s.length) s = s + ' '.repeat(p-s.length);
+    s = s.slice(0,p)+'['+c+']'+s.slice(p);
+  }
+  return s.trimEnd();
+}
+
+/* =========================================================
+   PARSER ChordPro -> bloques/líneas/segmentos
+   ========================================================= */
+function parsear(cho){
+  const bloques=[]; let cur=[];
+  for(const raw of cho.split('\n')){
+    const line=raw.trimEnd();
+    if(!line.trim()){ if(cur.length){bloques.push(cur);cur=[];} continue; }
+    const inst=line.match(/^\s*\{\s*inst\s*:\s*(.*)\}\s*$/i);
+    if(inst){ cur.push({inst:true, segs:inst[1].trim().split(/\s+/).map(c=>({c,l:''}))}); continue; }
+    if(/^\s*\{.*\}\s*$/.test(line)) continue;
+    const segs=[]; const re=/\[([^\]]*)\]/g; let last=0, m, pend='';
+    while((m=re.exec(line))){
+      const txt=line.slice(last,m.index);
+      if(txt||pend) segs.push({c:pend,l:txt});
+      pend=m[1]; last=re.lastIndex;
+    }
+    segs.push({c:pend,l:line.slice(last)});
+    const texto=segs.map(s=>s.l).join('').trim();
+    cur.push({inst:!texto, segs: segs.filter(s=>s.c||s.l)});
+  }
+  if(cur.length) bloques.push(cur);
+  return bloques;
+}
+
+/* Divide los segmentos en palabras para que la línea pueda cortar
+   sin separar nunca un acorde de su sílaba. */
+function htmlLinea(ln, st, bem){
+  // Agrupa por palabra: si un acorde cae a mitad de palabra ("compa[G]ñero"),
+  // las dos mitades quedan en un mismo grupo y nunca se separan al cortar la línea.
+  const grupos=[]; let g=[]; let terminoEspacio=true;
+  for(const s of ln.segs){
+    const ch = s.c ? transponer(s.c, st, bem) : '';
+    const partes = s.l.match(/\S+\s*|\s+/g) || [''];
+    partes.forEach((p,i)=>{
+      if(terminoEspacio && g.length){ grupos.push(g); g=[]; }
+      g.push(`<span class="seg"><span class="c">${i===0?esc(ch):''}</span><span class="l">${esc(p)||(i===0&&ch?'\u00a0':'')}</span></span>`);
+      terminoEspacio = p==='' ? true : /\s$/.test(p);
+    });
+  }
+  if(g.length) grupos.push(g);
+  return grupos.map(x=>`<span class="w">${x.join('')}</span>`).join('');
+}
+function esc(s){ return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* =========================================================
+   NAVEGACIÓN
+   ========================================================= */
+function ver(id){ document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on', v.id===id)); }
+
+function pintarLista(){
+  const el=document.getElementById('lista');
+  el.innerHTML = songs.map(s=>`
+    <div class="item">
+      <div class="t" data-abrir="${s.id}"><b>${esc(s.title||'Sin título')}</b><span>${esc(s.artist||'')}${s.key?' · '+esc(s.key):''}</span></div>
+      <button data-editar="${s.id}">Editar</button>
+      ${s.id!=='demo'?`<button data-borrar="${s.id}">✕</button>`:''}
+    </div>`).join('');
+}
+document.getElementById('lista').addEventListener('click',e=>{
+  const a=e.target.closest('[data-abrir]'), ed=e.target.closest('[data-editar]'), b=e.target.closest('[data-borrar]');
+  if(a) abrir(a.dataset.abrir);
+  if(ed) editar(ed.dataset.editar);
+  if(b){
+    if(b.dataset.ok){ songs=songs.filter(s=>s.id!==b.dataset.borrar); guardarTodo(); pintarLista(); }
+    else { b.dataset.ok=1; b.textContent='¿Borrar?'; setTimeout(()=>{ if(b.isConnected){ delete b.dataset.ok; b.textContent='✕'; } },2500); }
+  }
+});
+
+/* ---------- Editor ---------- */
+let editando=null;
+const $=id=>document.getElementById(id);
+$('btnNueva').onclick=()=>editar(null);
+$('edVolver').onclick=()=>ver('biblio');
+$('edArchivo').onclick=()=>$('edFile').click();
+$('edFile').onchange=async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  $('edTexto').value = await f.text();
+  if(!$('edTitulo').value) $('edTitulo').value=f.name.replace(/\.[^.]+$/,'');
+};
+$('edConvertir').onclick=()=>{
+  const r=aChordPro($('edTexto').value);
+  aplicarMeta(r.meta); $('edTexto').value=r.cho;
+};
+function aplicarMeta(m){
+  if(m.title && !$('edTitulo').value) $('edTitulo').value=m.title;
+  if(m.artist && !$('edArtista').value) $('edArtista').value=m.artist;
+  if(m.key && !$('edTono').value) $('edTono').value=m.key;
+}
+function editar(id){
+  editando=id; const s=songs.find(x=>x.id===id);
+  $('edTit').textContent = s?'Editar canción':'Agregar canción';
+  $('edTitulo').value=s?s.title:''; $('edArtista').value=s?s.artist:'';
+  $('edTono').value=s?s.key:''; $('edTexto').value=s?s.cho:'';
+  ver('editor');
+}
+$('edGuardar').onclick=()=>{
+  const r=aChordPro($('edTexto').value); aplicarMeta(r.meta);
+  const datos={title:$('edTitulo').value.trim()||'Sin título', artist:$('edArtista').value.trim(), key:$('edTono').value.trim(), cho:r.cho};
+  if(editando){ Object.assign(songs.find(s=>s.id===editando), datos); }
+  else { songs.push({id:'s'+Date.now(), ...datos}); }
+  guardarTodo(); pintarLista(); ver('biblio');
+};
+
+/* =========================================================
+   ATRIL
+   ========================================================= */
+let cancion=null, bloques=[], lineas=[], letra=[], cur=0, semis=0, bem=false;
+let fs = +(localStorage.getItem('escenario.fs')||30);
+let conAcordes = localStorage.getItem('escenario.acordes')!=='no';
+
+function abrir(id){
+  cancion=songs.find(s=>s.id===id); semis=0; bem=prefiereBemoles(cancion.cho);
+  bloques=parsear(cancion.cho);
+  $('stTitulo').textContent=cancion.title;
+  pintarAtril(); cur=0; ver('stage'); marcar(true); pedirWakeLock();
+}
+function metaTexto(){
+  const k = cancion.key ? transponer(cancion.key, semis, bem) : '';
+  return [cancion.artist, k?('Tono '+k):'', semis?((semis>0?'+':'')+semis+' st'):''].filter(Boolean).join(' · ');
+}
+function pintarAtril(){
+  $('stMeta').textContent=metaTexto();
+  const sc=$('scroll'); sc.innerHTML=''; lineas=[]; letra=[];
+  sc.classList.toggle('nochords', !conAcordes);
+  document.documentElement.style.setProperty('--fs', fs+'px');
+  bloques.forEach(b=>{
+    const d=document.createElement('div'); d.className='blk';
+    b.forEach(ln=>{
+      const p=document.createElement('div');
+      p.className='ln'+(ln.inst?' inst':'');
+      p.innerHTML=htmlLinea(ln, semis, bem);
+      d.appendChild(p);
+      if(!ln.inst){
+        p.dataset.i=letra.length;
+        letra.push({el:p, tokens: tokens(ln.segs.map(s=>s.l).join(''))});
+      }
+      lineas.push(p);
+    });
+    sc.appendChild(d);
+  });
+}
+function marcar(sinAnim){
+  letra.forEach((L,i)=>{
+    L.el.classList.remove('past','cur','next','rest');
+    L.el.classList.add(i<cur?'past': i===cur?'cur': i<=cur+2?'next':'rest');
+  });
+  const el=letra[cur]?.el; if(!el) return;
+  const sc=$('scroll');
+  const top = el.offsetTop - sc.clientHeight*0.28;
+  sc.scrollTo({top, behavior: sinAnim?'auto':'smooth'});
+}
+function ir(i){ cur=Math.max(0,Math.min(letra.length-1,i)); marcar(); }
+
+$('scroll').addEventListener('click',e=>{
+  const l=e.target.closest('.ln[data-i]');
+  if(l){ ir(+l.dataset.i); bufferReset(); }
+  else document.getElementById('stage').classList.toggle('hide-ui');
+});
+$('prev').onclick=()=>{ir(cur-1);bufferReset();};
+$('next').onclick=()=>{ir(cur+1);bufferReset();};
+$('fsMenos').onclick=()=>{fs=Math.max(16,fs-3);guardarFs();};
+$('fsMas').onclick=()=>{fs=Math.min(64,fs+3);guardarFs();};
+function guardarFs(){ try{localStorage.setItem('escenario.fs',fs);}catch(e){} document.documentElement.style.setProperty('--fs', fs+'px'); setTimeout(()=>marcar(true),30); }
+$('trMenos').onclick=()=>{semis--; bem=true; repintar();};
+$('trMas').onclick=()=>{semis++; bem=false; repintar();};
+$('acordes').onclick=()=>{conAcordes=!conAcordes; try{localStorage.setItem('escenario.acordes',conAcordes?'si':'no');}catch(e){} repintar();};
+function repintar(){ const c=cur; pintarAtril(); cur=c; marcar(true); }
+$('stVolver').onclick=()=>{ pararMic(); ver('biblio'); };
+$('stA4').onclick=()=>abrirA4();
+
+// Pedal Bluetooth / teclado
+document.addEventListener('keydown',e=>{
+  if(!$('stage').classList.contains('on')) return;
+  if(['ArrowRight','ArrowDown','PageDown',' ','Enter'].includes(e.key)){ e.preventDefault(); ir(cur+1); bufferReset(); }
+  if(['ArrowLeft','ArrowUp','PageUp','Backspace'].includes(e.key)){ e.preventDefault(); ir(cur-1); bufferReset(); }
+});
+
+// Pantalla siempre encendida
+let wake=null;
+async function pedirWakeLock(){ try{ wake = await navigator.wakeLock?.request('screen'); }catch(e){} }
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && $('stage').classList.contains('on')) pedirWakeLock(); });
+
+/* =========================================================
+   SEGUIMIENTO POR VOZ
+   ========================================================= */
+function norm(s){ return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zñ0-9\s]/g,' '); }
+function tokens(s){ return norm(s).split(/\s+/).filter(w=>w.length>1); }
+function lev(a,b){
+  const m=a.length,n=b.length; if(!m) return n; if(!n) return m;
+  let p=Array.from({length:n+1},(_,j)=>j);
+  for(let i=1;i<=m;i++){ const q=[i]; for(let j=1;j<=n;j++) q[j]=Math.min(p[j]+1,q[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1)); p=q; }
+  return p[n];
+}
+function parecido(a,b){ return 1 - lev(a,b)/Math.max(a.length,b.length); }
+function puntaje(oido, lineTok){
+  if(!oido.length||!lineTok.length) return 0;
+  let ok=0;
+  for(const w of oido){ if(lineTok.some(t=>parecido(w,t)>=0.72)) ok++; }
+  return ok/oido.length;
+}
+
+let rec=null, escuchando=false, finalTail='', perdidos=0;
+function bufferReset(){ finalTail=''; perdidos=0; }
+
+function evaluar(texto){
+  const oido = tokens(texto).slice(-6);
+  $('oido').textContent = oido.length ? '“'+oido.join(' ')+'”' : '';
+  if(oido.length<2) return;
+  // 1) Ventana hacia adelante: actual + 3 siguientes (respeta la continuidad)
+  let mejor=-1, mejorP=0;
+  for(let i=cur;i<=Math.min(cur+3,letra.length-1);i++){
+    const p = puntaje(oido, letra[i].tokens) - 0.06*(i-cur);
+    if(p>mejorP){ mejorP=p; mejor=i; }
+  }
+  if(mejor>=0 && mejorP>=0.5){
+    perdidos=0;
+    if(mejor!==cur){ cur=mejor; marcar(); finalTail=''; }
+    // Si ya cantó el final de la línea, pasa a la siguiente
+    const t=letra[cur].tokens, fin=t.slice(-2);
+    if(fin.length===2 && oido.length>=2 && parecido(oido.at(-1),fin[1])>=0.75 && parecido(oido.at(-2),fin[0])>=0.7 && cur<letra.length-1){
+      cur++; marcar(); finalTail='';
+    }
+    return;
+  }
+  // 2) Perdido: después de varios intentos, busca en toda la canción
+  if(oido.length>=4 && ++perdidos>=4){
+    let bi=-1,bp=0;
+    letra.forEach((L,i)=>{ const p=puntaje(oido,L.tokens) - (i<cur?0.1:0); if(p>bp){bp=p;bi=i;} });
+    if(bi>=0 && bp>=0.8){ cur=bi; marcar(); perdidos=0; finalTail=''; }
+  }
+}
+
+function crearRec(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR) return null;
+  const r=new SR(); r.lang='es-AR'; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
+  r.onresult=e=>{
+    let interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const t=e.results[i][0].transcript;
+      if(e.results[i].isFinal) finalTail=(finalTail+' '+t).split(/\s+/).slice(-8).join(' ');
+      else interim+=' '+t;
+    }
+    evaluar(finalTail+' '+interim);
+  };
+  r.onerror=e=>{
+    if(e.error==='not-allowed'||e.error==='service-not-allowed'){
+      escuchando=false; marcarMic();
+      avisar('No tengo permiso para usar el micrófono acá. Dentro de la vista previa de Claude el micrófono está bloqueado: abrí el Atril en Chrome (desde tu página de GitHub Pages o la app instalada) y dale permiso al micrófono. Mientras tanto podés avanzar tocando la pantalla, con ◀ ▶ o con el pedal.');
+    }
+  };
+  // Micrófono siempre prendido: si el navegador lo corta, se vuelve a encender solo
+  r.onend=()=>{ if(escuchando) setTimeout(()=>{ try{r.start();}catch(e){} },200); };
+  return r;
+}
+function avisar(t){ const a=$('aviso'); a.textContent=t; a.style.display='block'; setTimeout(()=>a.style.display='none',12000); }
+function marcarMic(){ $('mic').classList.toggle('on',escuchando); $('mic').textContent=escuchando?'🎤 Escuchando… (tocá para apagar)':'🎤 Escuchar'; if(!escuchando) $('oido').textContent=''; }
+function pararMic(){ escuchando=false; try{rec&&rec.stop();}catch(e){} marcarMic(); }
+$('mic').onclick=()=>{
+  if(escuchando){ pararMic(); return; }
+  if(!rec) rec=crearRec();
+  if(!rec){ avisar('Este navegador no tiene reconocimiento de voz. Usá Chrome en Android.'); return; }
+  escuchando=true; bufferReset(); marcarMic();
+  try{ rec.start(); }catch(e){}
+};
+
+/* =========================================================
+   VISTA A4: una sola página, ajuste automático
+   ========================================================= */
+function abrirA4(){
+  $('a4T').textContent=cancion.title;
+  $('a4A').textContent=cancion.artist||'';
+  $('a4K').textContent=cancion.key?('Tono: '+transponer(cancion.key,semis,bem)):'';
+  const c=$('a4C'); c.innerHTML='';
+  bloques.forEach(b=>{
+    const d=document.createElement('div'); d.className='blk';
+    b.forEach(ln=>{ const p=document.createElement('div'); p.className='ln'+(ln.inst?' inst':''); p.innerHTML=htmlLinea(ln,semis,bem); d.appendChild(p); });
+    c.appendChild(d);
+  });
+  c.classList.toggle('nochords', !conAcordes);
+  ver('a4view');
+  requestAnimationFrame(()=>{ ajustarA4(); escalarA4(); });
+}
+function ajustarA4(){
+  const page=$('a4'), cuerpo=$('a4C'), lienzo=page.querySelector('.lienzo');
+  const disponible = () => lienzo.clientHeight;
+  const cabe = () => cuerpo.offsetTop + cuerpo.scrollHeight <= disponible() - 16;
+  const cabeCols = () => cuerpo.scrollWidth <= cuerpo.clientWidth + 2 && cabe();
+  let modo='una columna', size=26;
+  cuerpo.classList.remove('dos'); cuerpo.style.height='';
+  cuerpo.style.fontSize=size+'px';
+  while(!cabe() && size>15){ size-=0.5; cuerpo.style.fontSize=size+'px'; }
+  if(!cabe()){
+    cuerpo.classList.add('dos'); modo='dos columnas';
+    cuerpo.style.height=(disponible()-cuerpo.offsetTop-16)+'px';
+    size=22; cuerpo.style.fontSize=size+'px';
+    while(!cabeCols() && size>9){ size-=0.5; cuerpo.style.fontSize=size+'px'; }
+  }
+  $('a4Info').textContent=`Entra en una página A4 · ${modo} · letra de ${Math.round(size*0.75)} pt · creado por Ezequiel de Luis`;
+}
+function escalarA4(){
+  const w=$('a4wrap').clientWidth-32, s=Math.min(1,w/794);
+  $('a4').style.transform=`scale(${s})`;
+  $('a4holder').style.width=794*s+'px'; $('a4holder').style.height=1123*s+'px';
+}
+window.addEventListener('resize',()=>{ if($('a4view').classList.contains('on')) escalarA4(); });
+$('a4Volver').onclick=()=>ver('stage');
+$('a4Imprimir').onclick=()=>{
+  try{ window.print(); }catch(e){}
+  setTimeout(()=>{ $('a4Info').textContent='Si no se abrió la ventana de impresión, es porque la vista previa de Claude la bloquea. Abrí el Atril en Chrome y ahí elegí "Guardar como PDF".'; },600);
+};
+$('a4Copiar').onclick=async()=>{
+  const k=cancion.key?`{key: ${transponer(cancion.key,semis,bem)}}\n`:'';
+  const txt=`{title: ${cancion.title}}\n${cancion.artist?`{artist: ${cancion.artist}}\n`:''}${k}\n${semis?transponerCho(cancion.cho):cancion.cho}`;
+  try{ await navigator.clipboard.writeText(txt); $('a4Copiar').textContent='¡Copiado!'; }
+  catch(e){ $('a4Copiar').textContent='No se pudo copiar'; }
+  setTimeout(()=>$('a4Copiar').textContent='Copiar',1800);
+};
+function transponerCho(cho){ return cho.replace(/\[([^\]]+)\]/g,(m,c)=>'['+transponer(c,semis,bem)+']').replace(/\{inst:\s*(.*)\}/gi,(m,cs)=>'{inst: '+cs.split(/\s+/).map(c=>transponer(c,semis,bem)).join(' ')+'}'); }
+
+/* ========================================================= */
+cargar(); pintarLista();
+if("serviceWorker" in navigator && location.protocol==="https:"){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
+</script>
+</body>
+</html>
