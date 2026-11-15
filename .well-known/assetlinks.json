@@ -11,5 +11,17 @@
         "19:0C:69:1C:32:BD:DD:99:0D:1E:C5:AF:39:A5:71:5E:CE:3C:27:9D:6F:F5:96:CB:F1:AB:1A:74:31:CC:A6:AE"
       ]
     }
+  },
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ar.ezequieldeluis.atrilescenario",
+      "sha256_cert_fingerprints": [
+        "78:33:BA:8D:2A:97:D2:E2:D6:68:1F:F8:B2:C2:88:AB:F9:27:BC:93:C1:92:64:65:EF:76:6B:09:82:BC:A4:C0"
+      ]
+    }
   }
 ]
