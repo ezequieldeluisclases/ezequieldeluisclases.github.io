@@ -953,14 +953,15 @@ const Mic = {
     this.ultimo = Date.now();
     this.guardia = setInterval(()=>{
       if (!this.quiere) return;
+      const sonido = this.haySonido();
+      // Con el filtro puesto: si en 10 segundos no llegó ningún texto (o no arrancó),
+      // este teléfono no lo acepta. Se vuelve al micrófono común, que siempre anda.
+      const conFiltro = Date.now() - this.inicioPista;
+      if (this.pista && this.textosConPista === 0 && (conFiltro > 10000 || (!this.vivo && conFiltro > 3000))){
+        this.dejarFiltro(this.conSonido >= 3000); this.reiniciar(); return;
+      }
       if (!this.vivo){ this.encender(true); return; }
       const quieto = Date.now() - this.ultimo;
-      const sonido = this.haySonido();
-      // Si con el filtro se oye sonido fuerte un buen rato y nunca llegó texto, este teléfono
-      // no acepta el filtro: se vuelve al micrófono común y se recuerda.
-      if (this.pista && this.textosConPista === 0 && Date.now() - this.inicioPista > 20000 && this.conSonido > 8000){
-        this.pistaFalla = true; ls.set("atril.sinFiltro", true); this.soltarPista(); this.reiniciar(); return;
-      }
       // Se está cantando (hay sonido) pero no llega texto: el reconocedor se trabó.
       if (this.rec && sonido && quieto > 4500) { this.reiniciar(); return; }
       // A veces el teléfono deja el micrófono "prendido" pero no manda más nada: se lo reinicia.
@@ -993,6 +994,11 @@ const Mic = {
       return this.pista;
     }catch(e){ this.soltarPista(); this.pistaFalla = true; return null; }
   },
+  // Deja el filtro de voz y vuelve al micrófono común (si "recordar", ya no lo intenta más en este teléfono).
+  dejarFiltro(recordar){
+    this.pistaFalla = true; if (recordar) ls.set("atril.sinFiltro", true);
+    this.soltarPista();
+  },
   soltarPista(){
     try{ this.flujo && this.flujo.getTracks().forEach(t=>t.stop()); }catch(e){}
     try{ this.ac && this.ac.close(); }catch(e){}
@@ -1011,7 +1017,7 @@ const Mic = {
   iniciar(r){
     if (this.pista && this.pista.readyState === "live" && !this.pistaFalla){
       try{ r.start(this.pista); return; }
-      catch(e){ if (e && e.name === "TypeError"){ this.pistaFalla = true; ls.set("atril.sinFiltro", true); this.soltarPista(); } else return; }
+      catch(e){ this.dejarFiltro(true); }
     }
     try{ r.start(); }catch(e){}
   },
@@ -1034,7 +1040,7 @@ const Mic = {
           if ((ev.error==="not-allowed" || ev.error==="service-not-allowed") && !this.pista){ this.quiere=false; this.vivo=false; clearInterval(this.guardia); this.rec=null; this.soltarPista(); this.ui(); sinMic(); return; }
           // Si el filtro no le gusta a este teléfono, se vuelve al micrófono común y se recuerda.
           if (this.pista && ["audio-capture","not-allowed","service-not-allowed","bad-grammar","language-not-supported"].includes(ev.error)){
-            this.pistaFalla = true; ls.set("atril.sinFiltro", true); this.soltarPista(); setTimeout(()=>this.reiniciar(), 100); return;
+            this.dejarFiltro(true); setTimeout(()=>this.reiniciar(), 100); return;
           }
           // Cortes de internet repetidos: si el teléfono reconoce sin internet, se pasa a eso.
           if (ev.error === "network"){ const ahora = Date.now(); this.errRed = this.errRed.filter(t=>ahora-t<60000); this.errRed.push(ahora); if (this.errRed.length >= 2) this.probarLocal(); }
