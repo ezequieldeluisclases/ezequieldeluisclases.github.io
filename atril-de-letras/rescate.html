@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atril de letras · revisar canciones</title>
+<style>body{font-family:system-ui,sans-serif;background:#0e0d0b;color:#f3efe6;padding:18px;line-height:1.5}
+li{margin:4px 0}button{font:inherit;padding:12px 16px;border-radius:12px;border:0;background:#f2b33d;color:#1b1407;font-weight:700;margin:6px 0}
+.dim{color:#9a9284;font-size:14px}textarea{width:100%;height:30vh;background:#141310;color:#f3efe6;border:1px solid #2b2823;border-radius:10px;font-size:12px}</style></head>
+<body>
+<h2>Canciones guardadas en este teléfono</h2>
+<div id="res">Revisando…</div>
+<script>
+const out = document.getElementById("res");
+let datos = null, crudo = null;
+try{ crudo = localStorage.getItem("atril.canciones"); datos = crudo ? JSON.parse(crudo) : []; }catch(e){ out.textContent = "No pude leer lo guardado: " + e.message; }
+if (datos){
+  const otras = []; for (let i=0;i<localStorage.length;i++) otras.push(localStorage.key(i));
+  out.innerHTML = `<p><b>${datos.length}</b> canción(es) guardada(s).</p><ol>${datos.map(s=>`<li>${(s.titulo||"Sin título").replace(/</g,"&lt;")}</li>`).join("")}</ol>
+    <p class="dim">Datos guardados: ${otras.join(", ") || "ninguno"}</p>
+    ${datos.length ? '<button id="copiar">Guardar una copia de seguridad</button><p class="dim">Baja un archivo que después se carga en el Atril con «Cargar copia».</p>' : ''}
+    <p><a href="./" style="color:#f2b33d">Volver al Atril</a></p>`;
+  const b = document.getElementById("copiar");
+  if (b) b.onclick = ()=>{
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({app:"atril-de-letras", version:1, fecha:new Date().toISOString(), canciones:datos}, null, 1)], {type:"application/json"}));
+    a.download = "atril-canciones-rescate.json"; document.body.appendChild(a); a.click();
+  };
+}
+</script>
+</body></html>
