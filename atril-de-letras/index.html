@@ -1075,22 +1075,31 @@ const Local = {
   armarReconocedor(){
     if (!this.modelo || !this.ac) return;
     if (this.rec){ try{ this.rec.remove(); }catch(e){} this.rec = null; }
-    const g = this.gramatica();
-    const r = g ? new this.modelo.KaldiRecognizer(this.ac.sampleRate, g) : new this.modelo.KaldiRecognizer(this.ac.sampleRate);
+    // Escucha todo el castellano: la app después compara con la letra (con gramática cerrada, al cantar respondía casi todo "no sé").
+    const r = new this.modelo.KaldiRecognizer(this.ac.sampleRate);
     r.on("result", m=>{ const t = m && m.result && m.result.text; Mic.ultimo = Date.now(); if (t && t.replace(/\[unk\]/g,"").trim()) Oido.final(t.replace(/\[unk\]/g," ")); });
     r.on("partialresult", m=>{ const t = m && m.result && m.result.partial; if (t){ Mic.ultimo = Date.now(); Oido.parcialTxt(t.replace(/\[unk\]/g," ")); } });
     this.rec = r;
   },
+  // El audio se prepara en el mismo toque del botón: si no, el teléfono lo deja en pausa.
+  prepararAudio(){
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!this.ac || this.ac.state === "closed") this.ac = new AC();
+    try{ this.ac.resume(); }catch(e){}
+  },
   async escuchar(){
     this.flujo = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:true, autoGainControl:true, channelCount:1}});
-    const AC = window.AudioContext || window.webkitAudioContext;
-    this.ac = new AC(); try{ await this.ac.resume(); }catch(e){}
+    this.prepararAudio(); try{ await this.ac.resume(); }catch(e){}
+    this.inicio = Date.now(); this.conSonido = false;
     const ac = this.ac, fuente = ac.createMediaStreamSource(this.flujo);
     const filtro = (tipo, f, q)=>{ const b = ac.createBiquadFilter(); b.type = tipo; b.frequency.value = f; b.Q.value = q; return b; };
     const g1 = filtro("highpass", 140, .7), a1 = filtro("lowpass", 6000, .7);
     const comp = ac.createDynamicsCompressor(); comp.threshold.value = -30; comp.ratio.value = 3;
     this.proc = ac.createScriptProcessor(4096, 1, 1);
-    this.proc.onaudioprocess = e=>{ if (this.rec){ try{ this.rec.acceptWaveform(e.inputBuffer); }catch(err){} } };
+    this.proc.onaudioprocess = e=>{
+      const d = e.inputBuffer.getChannelData(0); let m = 0; for (let i=0;i<d.length;i+=16){ const v = Math.abs(d[i]); if (v > m) m = v; }
+      if (m > .003) this.conSonido = true;
+      if (this.rec){ try{ this.rec.acceptWaveform(e.inputBuffer); }catch(err){} } };
     fuente.connect(g1); g1.connect(a1); a1.connect(comp); comp.connect(this.proc); this.proc.connect(ac.destination);
     this.fuente = fuente;
     this.armarReconocedor();
@@ -1099,15 +1108,18 @@ const Local = {
   vigilar(){
     if (!this.ac) return false;
     if (this.ac.state === "suspended"){ try{ this.ac.resume(); }catch(e){} }
+    // A los 6 segundos sin que entre nada de sonido, se avisa (el teléfono no está dando el micrófono).
+    if (!this.conSonido && Date.now() - this.inicio > 6000) avisoLocal("No me está llegando sonido del micrófono. Tocá la pantalla; si sigue igual, revisá el permiso del micrófono.");
+    else if (this.conSonido && $("#avisoLocal").textContent.startsWith("No me está llegando")) avisoLocal("");
     const pista = this.flujo && this.flujo.getAudioTracks()[0];
     return this.ac.state !== "closed" && !!pista && pista.readyState === "live";
   },
-  soltar(){
+  soltar(cerrar){
     if (this.rec){ try{ this.rec.remove(); }catch(e){} this.rec = null; }
-    try{ this.proc && (this.proc.onaudioprocess = null); }catch(e){}
+    try{ this.proc && (this.proc.onaudioprocess = null); this.proc && this.proc.disconnect(); this.fuente && this.fuente.disconnect(); }catch(e){}
     try{ this.flujo && this.flujo.getTracks().forEach(t=>t.stop()); }catch(e){}
-    try{ this.ac && this.ac.close(); }catch(e){}
-    this.ac = null; this.flujo = null; this.proc = null; this.fuente = null;
+    if (cerrar){ try{ this.ac && this.ac.close(); }catch(e){} this.ac = null; }
+    this.flujo = null; this.proc = null; this.fuente = null;
   }
 };
 
@@ -1325,7 +1337,7 @@ const Mic = {
     if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
   },
   arrancar(){
-    this.quiere = true; this.caido = 0; this.ui(); this.encender(); if (!this.usaLocal()) this.prepararLocal();
+    this.quiere = true; this.caido = 0; this.ui(); if (this.usaLocal()) Local.prepararAudio(); this.encender();
     // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
     clearInterval(this.guardia);
     this.ultimo = Date.now();
@@ -1361,7 +1373,10 @@ const Mic = {
         if (this.local && ++this.trabasLocal >= 3){ this.dejarLocal(); return; }
         this.reiniciar(); return; }
       // A veces el teléfono deja el micrófono "prendido" pero no manda más nada: se lo reinicia.
-      if (this.rec && quieto > (this.an ? 10000 : 7000) && !reciente) this.reiniciar();
+      if (this.rec && quieto > (this.an ? 10000 : 7000) && !reciente){
+        // Sin internet de Google y no llega nada: vuelve al reconocedor común.
+        if (this.local && !this.textoLocal){ this.dejarLocal(); return; }
+        this.reiniciar(); }
     }, 1500);
   },
   // Arma el filtro de voz (si el teléfono lo permite). Devuelve la pista filtrada o null.
@@ -1451,7 +1466,7 @@ const Mic = {
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=5;
         if (this.local) { try{ r.processLocally = true; }catch(e){} this.ponerFrases(r); }
         r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
-        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.trabasLocal = 0; if (this.pista) this.textosConPista++; this.conSonido = 0;
+        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.trabasLocal = 0; if (this.local) this.textoLocal = true; if (this.pista) this.textosConPista++; this.conSonido = 0;
           let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i], alts=[]; for (let j=0;j<res.length;j++) alts.push(res[j].transcript); const t=Oido.elegir(alts); if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
           // Una vez que anduvo, un "sin permiso" suelto es un corte del teléfono: se reintenta.
@@ -1533,7 +1548,7 @@ const Mic = {
     }catch(e){}
   },
   // Si sin internet entiende mal en este teléfono, se vuelve al reconocedor común y se recuerda.
-  dejarLocal(){ this.local = false; ls.set("atril.sinLocal", true); this.reiniciar(); },
+  dejarLocal(){ this.local = false; this.textoLocal = false; ls.set("atril.sinLocal", true); this.reiniciar(); },
   // Canción nueva: el reconocedor sin internet recibe la letra nueva.
   cambioCancion(){
     if (this.usaLocal()){ if (this.vivo) Local.armarReconocedor(); return; }
@@ -1563,7 +1578,7 @@ const Mic = {
   revivir(){ if (this.quiere && !this.vivo) this.encender(); },
   parar(){
     this.quiere = false; clearInterval(this.guardia); this.ui();
-    Local.soltar();
+    Local.soltar(true); avisoLocal("");
     if (this.rec){ try{ this.rec.stop(); }catch(e){} }
     this.soltarPista();
     if (this.dict && this.vivo){ try{ this.dict.stop(); }catch(e){} }
@@ -1571,7 +1586,7 @@ const Mic = {
   }
 };
 document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible") Mic.revivir(); });
-$("#escena").addEventListener("pointerdown", e=>{ if (!e.target.closest("#btnMic")) Mic.revivir(); });
+$("#escena").addEventListener("pointerdown", e=>{ if (Local.ac && Local.ac.state === "suspended"){ try{ Local.ac.resume(); }catch(err){} } if (!e.target.closest("#btnMic")) Mic.revivir(); });
 $("#btnMic").onclick = ()=>{ if (Mic.on) Mic.parar(); else Mic.arrancar(); };
 $("#retomar").onclick = ()=>Mic.arrancar();
 function sinMic(){
