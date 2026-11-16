@@ -242,11 +242,26 @@ const NIVELES = {
 };
 let nivel = NIVELES.normal;
 const _simCache = new Map();
+// Cómo suena la palabra en castellano rioplatense: b/v, s/z/c, y/ll, h muda, etc.
+// Así "vos" y "bos", "caza" y "casa", "llorar" y "yorar" se toman como la misma palabra.
+const _fonCache = new Map();
+function fon(w){
+  let f = _fonCache.get(w); if (f!==undefined) return f;
+  f = w.replace(/ch/g,"C").replace(/h/g,"").replace(/qu/g,"k").replace(/gu([ei])/g,"g$1")
+    .replace(/c([ei])/g,"s$1").replace(/z/g,"s").replace(/c/g,"k").replace(/v/g,"b").replace(/w/g,"u")
+    .replace(/ll/g,"y").replace(/g([ei])/g,"j$1").replace(/x/g,"ks").replace(/y$/,"i")
+    .replace(/(.)\1+/g,"$1").replace(/(.{3,})s$/,"$1").replace(/d$/,"");
+  if (_fonCache.size > 20000) _fonCache.clear();
+  _fonCache.set(w, f); return f;
+}
 function sim(a,b){
   if (a===b) return 1;
   const k = (nivel.laxo?"1":"0")+a+"|"+b; const c = _simCache.get(k); if (c!==undefined) return c;
   if (_simCache.size > 20000) _simCache.clear();
-  const r = simCalc(a,b); _simCache.set(k, r); return r;
+  let r = simCalc(a,b);
+  if (r < .9){ const fa = fon(a), fb = fon(b);
+    if (fa === fb && fa.length >= 2) r = .9; else if (fa !== a || fb !== b) r = Math.max(r, simCalc(fa, fb) - .03); }
+  _simCache.set(k, r); return r;
 }
 function simCalc(a,b){
   const L=Math.min(a.length,b.length);
@@ -870,7 +885,7 @@ function preparar(s){
     const idxs = e.map((x,i)=>x.tipo==="verso"?i:-1).filter(i=>i>=0);
     idxs.forEach((li,k)=>{
       const w = norm(e[li].texto); let clave = w.filter(x=>x.length>=3); if (clave.length<2) clave=w;
-      versos.push({s:si, li, k, total:idxs.length, ultimo:k===idxs.length-1, clave});
+      versos.push({s:si, li, k, total:idxs.length, ultimo:k===idxs.length-1, clave, txt:e[li].texto.trim()});
     });
   });
 }
@@ -918,7 +933,7 @@ function abrirEscena(idx){
   cancionIdx = idx; cancion = Store.songs[idx];
   preparar(cancion); actual = -1; armado = ""; Oido.reiniciar();
   $("#esTitulo").textContent = cancion.titulo + (cancion.artista ? " · " + cancion.artista : "");
-  mostrar("escena"); pintar(true); pedirPantalla();
+  mostrar("escena"); pintar(true); pedirPantalla(); Mic.cambioCancion();
 }
 $("#esVolver").onclick = ()=>{ Mic.parar(); try{ wake && wake.release(); }catch(e){} pintarLista(); mostrar("lista"); };
 
@@ -1025,6 +1040,22 @@ const Oido = {
     this.oidas.push(...w); this.parcial=[];
     if (this.oidas.length>120){ const q=this.oidas.length-80; this.oidas=this.oidas.slice(q); this.corte=Math.max(0,this.corte-q); }
     this.evaluar(); },
+  // El teléfono da varias versiones de lo que oyó: se queda con la que más se parece
+  // a la letra que viene (de un verso antes a cinco después, y el principio del tema).
+  elegir(alts){
+    if (alts.length < 2 || !versos.length) return alts[0] || "";
+    const cerca = [];
+    for (let g = Math.max(0, actual-1); g <= Math.min(versos.length-1, actual+5); g++) cerca.push(...versos[g].clave);
+    for (let g = 0; g < Math.min(2, versos.length); g++) cerca.push(...versos[g].clave);
+    let mejor = alts[0], mp = -1;
+    alts.forEach((t, i)=>{
+      const w = norm(t); if (!w.length) return;
+      let p = 0; for (const x of w){ let b = 0; for (const c of cerca){ const s = sim(x, c); if (s > b){ b = s; if (b === 1) break; } } p += b >= .6 ? b : 0; }
+      p = p / Math.max(1, w.length) + (i === 0 ? .05 : 0);
+      if (p > mp){ mp = p; mejor = t; }
+    });
+    return mejor;
+  },
   parcialTxt(t){ this.parcial = norm(t); this.corte = Math.min(this.corte, this.oidas.length + this.parcial.length); this.evaluar(); },
   puntaje(v, cola){
     if (!v.clave.length || !cola.length) return 0;
@@ -1199,7 +1230,7 @@ const Mic = {
   pistaFalla: ls.get("atril.sinFiltro", false),
   conSonido:0,    // milisegundos seguidos con sonido fuerte sin que llegue texto
   inicioPista:0, textosConPista:0,
-  local:false, errRed:[], ultReinicio:0, fallos:0, anduvo:false, caido:0,
+  local:false, sinFrases:false, trabasLocal:0, errRed:[], ultReinicio:0, fallos:0, anduvo:false, caido:0,
   get on(){ return this.quiere; },
   async preparar(){ try{ if (window.claude && claude.use) this.dict = await claude.use("dictation"); }catch(e){ this.dict=null; } },
   usarNativo(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; return SR && (!this.enMarco || !this.dict) ? SR : null; },
@@ -1208,7 +1239,7 @@ const Mic = {
     if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
   },
   arrancar(){
-    this.quiere = true; this.caido = 0; this.ui(); this.encender();
+    this.quiere = true; this.caido = 0; this.ui(); this.encender(); this.prepararLocal();
     // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
     clearInterval(this.guardia);
     this.ultimo = Date.now();
@@ -1234,7 +1265,9 @@ const Mic = {
       // No se reinicia seguido: cada reinicio deja un hueco en el que no escucha.
       const reciente = Date.now() - this.ultReinicio < 10000;
       // Hay sonido pero no llega texto hace rato (y no es un solo de guitarra corto): se trabó.
-      if (this.rec && sonido && quieto > 6500 && !reciente) { this.reiniciar(); return; }
+      if (this.rec && sonido && quieto > 6500 && !reciente) {
+        if (this.local && ++this.trabasLocal >= 3){ this.dejarLocal(); return; }
+        this.reiniciar(); return; }
       // A veces el teléfono deja el micrófono "prendido" pero no manda más nada: se lo reinicia.
       if (this.rec && quieto > (this.an ? 10000 : 7000) && !reciente) this.reiniciar();
     }, 1500);
@@ -1302,11 +1335,11 @@ const Mic = {
         if (!this.pistaFalla) return;
       }
       if (!this.rec){
-        const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
-        if (this.local) { try{ r.processLocally = true; }catch(e){} }
+        const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=5;
+        if (this.local) { try{ r.processLocally = true; }catch(e){} this.ponerFrases(r); }
         r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
-        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; if (this.pista) this.textosConPista++; this.conSonido = 0;
-          let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const t=ev.results[i][0].transcript; if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
+        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.trabasLocal = 0; if (this.pista) this.textosConPista++; this.conSonido = 0;
+          let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i], alts=[]; for (let j=0;j<res.length;j++) alts.push(res[j].transcript); const t=Oido.elegir(alts); if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
           // Una vez que anduvo, un "sin permiso" suelto es un corte del teléfono: se reintenta.
           if ((ev.error==="not-allowed" || ev.error==="service-not-allowed" || ev.error==="audio-capture") && !this.pista && this.anduvo && this.fallos < 20){
@@ -1320,6 +1353,8 @@ const Mic = {
           // Cortes de internet repetidos: si el teléfono reconoce sin internet, se pasa a eso.
           if (ev.error === "network"){ const ahora = Date.now(); this.errRed = this.errRed.filter(t=>ahora-t<60000); this.errRed.push(ahora); if (this.errRed.length >= 2) this.probarLocal(); }
           if (this.local && ev.error === "language-not-supported"){ this.local = false; setTimeout(()=>this.reiniciar(), 100); }
+          // Este reconocedor no acepta la letra como guía: sigue sin ella.
+          if (ev.error === "phrases-not-supported"){ this.sinFrases = true; setTimeout(()=>this.reiniciar(), 100); return; }
           // "no-speech", "aborted": se vuelve a prender solo en onend
         };
         r.onend = ()=>{ if (this.rec !== r) return; this.vivo = false; Oido.nuevaSesion();
@@ -1355,6 +1390,39 @@ const Mic = {
     }
     this.quiere = false; this.ui(); sinMic();
   },
+  // Le pasa al reconocedor los versos de la canción para que espere esas palabras.
+  ponerFrases(r){
+    const SP = window.SpeechRecognitionPhrase;
+    if (this.sinFrases || !SP || !versos.length) return;
+    try{
+      const vistas = new Set(), lista = [];
+      for (const v of versos){
+        const t = v.txt.replace(/[^\p{L}\p{N}\s']/gu," ").replace(/\s+/g," ").trim().split(" ").slice(0,10).join(" ");
+        if (t.length < 3 || vistas.has(t.toLowerCase())) continue;
+        vistas.add(t.toLowerCase()); lista.push(new SP(t, 3));
+        if (lista.length >= 80) break;
+      }
+      r.phrases = lista;
+    }catch(e){ this.sinFrases = true; }
+  },
+  // Al abrir el micrófono: si el teléfono puede reconocer sin internet, se usa eso,
+  // porque no se corta por la conexión y acepta la letra como guía.
+  async prepararLocal(){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (this.local || ls.get("atril.sinLocal", false) || !SR || !SR.available) return;
+    try{
+      const op = {langs:[Ajustes.idioma], processLocally:true};
+      const est = await SR.available(op);
+      if (est === "available"){ this.local = true; this.trabasLocal = 0; if (this.quiere) this.reiniciar(); }
+      else if ((est === "downloadable" || est === "downloading") && SR.install){
+        SR.install(op).then(ok=>{ if (ok && !this.local){ this.local = true; this.trabasLocal = 0; if (this.quiere) this.reiniciar(); } }).catch(()=>{});
+      }
+    }catch(e){}
+  },
+  // Si sin internet entiende mal en este teléfono, se vuelve al reconocedor común y se recuerda.
+  dejarLocal(){ this.local = false; ls.set("atril.sinLocal", true); this.reiniciar(); },
+  // Canción nueva: el reconocedor sin internet recibe la letra nueva.
+  cambioCancion(){ if (this.quiere && this.local && !this.sinFrases) this.reiniciar(); },
   async probarLocal(){
     if (this.local) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
