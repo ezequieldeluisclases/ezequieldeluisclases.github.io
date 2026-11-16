@@ -9,6 +9,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Atril">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icono-192.png">
 <link rel="apple-touch-icon" href="icono-192.png">
@@ -1198,7 +1199,7 @@ const Mic = {
   pistaFalla: ls.get("atril.sinFiltro", false),
   conSonido:0,    // milisegundos seguidos con sonido fuerte sin que llegue texto
   inicioPista:0, textosConPista:0,
-  local:false, errRed:[], ultReinicio:0, fallos:0, anduvo:false,
+  local:false, errRed:[], ultReinicio:0, fallos:0, anduvo:false, caido:0,
   get on(){ return this.quiere; },
   async preparar(){ try{ if (window.claude && claude.use) this.dict = await claude.use("dictation"); }catch(e){ this.dict=null; } },
   usarNativo(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; return SR && (!this.enMarco || !this.dict) ? SR : null; },
@@ -1207,7 +1208,7 @@ const Mic = {
     if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
   },
   arrancar(){
-    this.quiere = true; this.ui(); this.encender();
+    this.quiere = true; this.caido = 0; this.ui(); this.encender();
     // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
     clearInterval(this.guardia);
     this.ultimo = Date.now();
@@ -1223,6 +1224,9 @@ const Mic = {
       pedirPantalla();
       if (!this.vivo){
         // Apagado: se vuelve a prender. Si lleva rato sin poder, se arma de cero.
+        // Si no hay caso (algunos teléfonos, como el iPhone, piden un toque), aparece el aviso para tocar.
+        this.caido = this.caido || Date.now();
+        if (Date.now() - this.caido > 6000) $("#retomar").classList.add("on");
         if (Date.now() - this.ultimo > 4000) this.reiniciar(); else this.encender(true);
         return;
       }
@@ -1300,7 +1304,7 @@ const Mic = {
       if (!this.rec){
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
         if (this.local) { try{ r.processLocally = true; }catch(e){} }
-        r.onstart = ()=>{ this.vivo = true; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
+        r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
         r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; if (this.pista) this.textosConPista++; this.conSonido = 0;
           let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const t=ev.results[i][0].transcript; if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
@@ -1379,7 +1383,9 @@ $("#btnMic").onclick = ()=>{ if (Mic.on) Mic.parar(); else Mic.arrancar(); };
 $("#retomar").onclick = ()=>Mic.arrancar();
 function sinMic(){
   modal(`<p>No pude usar el micrófono en esta pantalla.</p>
-    <p class="ayuda">Abrí esta página en <b>Chrome</b> y aceptá el permiso del micrófono. Mientras tanto podés pasar las estrofas con los botones, deslizando el dedo o con un pedal.</p>
+    <p class="ayuda">${esIPhone
+      ? "Abrí esta página en <b>Safari</b> y aceptá el permiso del micrófono y del reconocimiento de voz. Si no aparece, revisá en Ajustes del iPhone que esté activado <b>Siri y Dictado</b> (Ajustes → General → Teclado → Activar dictado)."
+      : "Abrí esta página en <b>Chrome</b> y aceptá el permiso del micrófono."} Mientras tanto podés pasar las estrofas con los botones, deslizando el dedo o con un pedal.</p>
     <div class="fila"><button data-r="ok" class="pri">Entendido</button></div>`);
 }
 
@@ -1422,11 +1428,22 @@ if (navigator.clipboard && navigator.clipboard.readText){
 }
 // Instalar como aplicación (para quien la abre desde un enlace en Chrome)
 let pedidoInstalar = null;
-const yaInstalada = ()=> matchMedia("(display-mode: standalone)").matches || matchMedia("(display-mode: fullscreen)").matches || document.referrer.startsWith("android-app://");
+const esIPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const yaInstalada = ()=> navigator.standalone === true || matchMedia("(display-mode: standalone)").matches || matchMedia("(display-mode: fullscreen)").matches || document.referrer.startsWith("android-app://");
 function mostrarInstalar(){
   if (yaInstalada() || window.self !== window.top) return;
   const enAndroid = /Android/i.test(navigator.userAgent);
   const esChrome = /Chrome\//.test(navigator.userAgent) && !/; wv\)|FBAN|FBAV|Instagram|WhatsApp/i.test(navigator.userAgent);
+  if (esIPhone){
+    // En iPhone no hay botón de instalar: se agrega a la pantalla de inicio desde Safari.
+    const esSafari = /Safari\//.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS|FBAN|FBAV|Instagram|WhatsApp/i.test(navigator.userAgent);
+    $("#instalarTxt").textContent = esSafari
+      ? "Tocá el botón Compartir de Safari (el cuadrado con la flecha hacia arriba), bajá y elegí «Agregar a pantalla de inicio» → «Agregar»."
+      : "Abrí este enlace en Safari (no dentro de WhatsApp): tocá los tres puntitos o el ícono de la brújula y elegí «Abrir en Safari». Ahí vas a poder agregarla a la pantalla de inicio.";
+    $("#btnInstalar").style.display = "none";
+    $("#instalar").classList.add("on");
+    return;
+  }
   if (!enAndroid && !pedidoInstalar) return;
   if (!pedidoInstalar){
     $("#instalarTxt").textContent = esChrome
@@ -1452,7 +1469,7 @@ setTimeout(mostrarInstalar, 1500);
 // Compartir la app con amigos (WhatsApp u otra)
 const URL_APP = "https://ezequieldeluisclases.github.io/atril-de-letras/";
 $("#btnCompartirApp").onclick = async ()=>{
-  const texto = "Te paso el Atril de letras: muestra la letra y los acordes y te va siguiendo mientras cantás. Abrí el enlace en Chrome (no dentro de WhatsApp) y tocá «Instalar». Creado por Ezequiel de Luis.";
+  const texto = "Te paso el Atril de letras: muestra la letra y los acordes y te va siguiendo mientras cantás. Abrí el enlace fuera de WhatsApp: en Android, con Chrome, y tocá «Instalar»; en iPhone, con Safari, tocá Compartir y «Agregar a pantalla de inicio». Creado por Ezequiel de Luis.";
   if (navigator.share){
     try{ await navigator.share({title:"Atril de letras", text:texto, url:URL_APP}); return; }
     catch(e){ if (e && e.name==="AbortError") return; }
