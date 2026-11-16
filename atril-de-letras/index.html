@@ -233,7 +233,10 @@ function lev(a,b){
 const NIVELES = {
   normal: {nombre:"Normal",      paso1:.55, paso2:.85, minInicio:2, unaPalabra:99, retomarPalabras:4, retomar:.85, laxo:false},
   banda:  {nombre:"Con banda",   paso1:.45, paso2:.8,  minInicio:1, unaPalabra:7, retomarPalabras:3, retomar:.8,  laxo:true},
-  ruido:  {nombre:"Mucho ruido", paso1:.38, paso2:.75, minInicio:1, unaPalabra:5, retomarPalabras:3, retomar:.78, laxo:true}
+  ruido:  {nombre:"Mucho ruido", paso1:.38, paso2:.75, minInicio:1, unaPalabra:5, retomarPalabras:3, retomar:.78, laxo:true, anclas:true},
+  // Muchas voces juntas (chicos, aula, coro): se guía por una palabra clave o dos seguidas
+  // y siempre sigue el orden de la canción; solo vuelve atrás al terminar el tema.
+  grupo:  {nombre:"Coro / aula", paso1:.36, paso2:.72, minInicio:1, unaPalabra:5, retomarPalabras:4, retomar:.8, laxo:true, anclas:true, enOrden:true}
 };
 let nivel = NIVELES.normal;
 const _simCache = new Map();
@@ -317,7 +320,7 @@ const RE_INDICACION = /^\s*[\[(]?\s*(\d+\s*[ªºa°.]?\s*|(1r|2d|3r|4t)[ao]\s*|p
 function parsear(texto){
   const res = {tono:null, estrofas:[]};
   const limpio = (texto||"")
-    .replace(/\r\n?|[\u000b\u000c\u0085\u2028\u2029]/g, "\n")
+    .replace(/\r\n?|[\u000b\u000c\u0085]/g, "\n").replace(new RegExp("[" + String.fromCharCode(0x2028, 0x2029) + "]", "g"), "\n")
     .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, "")
     .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ")
     .replace(/\t/g, "    ").replace(/♯/g, "#").replace(/♭/g, "b");
@@ -899,7 +902,12 @@ $("#btnMas").onclick = ()=>{ fs=Math.min(64,fs+3); aplicarFs(); };
 $("#btnMenos").onclick = ()=>{ fs=Math.max(16,fs-3); aplicarFs(); };
 
 let wake=null;
-async function pedirPantalla(){ try{ if (navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); }catch(e){} }
+// La pantalla no se apaga mientras se canta (si se apaga, el teléfono corta el micrófono).
+async function pedirPantalla(){
+  if (!navigator.wakeLock || document.visibilityState !== "visible" || !$("#escena").classList.contains("on")) return;
+  if (wake && !wake.released) return;
+  try{ wake = await navigator.wakeLock.request("screen"); }catch(e){}
+}
 document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible" && $("#escena").classList.contains("on")) pedirPantalla(); });
 
 function abrirEscena(idx){
@@ -1000,13 +1008,14 @@ document.addEventListener("keydown", e=>{
 
 /* ---------- el oído ---------- */
 const Oido = {
-  oidas:[], parcial:[], corte:0, ultMov:Date.now(),
-  reiniciar(){ this.oidas=[]; this.parcial=[]; this.corte=0; },
+  oidas:[], parcial:[], corte:0, ultMov:Date.now(), ultFinal:[],
+  reiniciar(){ this.oidas=[]; this.parcial=[]; this.corte=0; this.ultFinal=[]; },
+  nuevaSesion(){ this.finParcial(); this.ultFinal=[]; },
   cortar(){ this.corte = this.oidas.length + this.parcial.length; this.ultMov = Date.now(); },
   todas(){ return this.oidas.concat(this.parcial); },
   // Si el reconocedor se corta, lo provisorio se da por oído.
   finParcial(){ if (this.parcial.length){ const base=this.oidas.length; this.oidas.push(...this.parcial); this.parcial=[]; this.corte=Math.min(this.corte, this.oidas.length); } },
-  final(t){ const base = this.oidas.length, w = norm(t);
+  final(t){ const base = this.oidas.length; let w = norm(t);
     // Las palabras provisorias ya usadas se reemplazan por las finales: el corte se acomoda a ellas.
     if (this.corte > base) this.corte = base + Math.min(this.corte - base, w.length);
     this.oidas.push(...w); this.parcial=[];
@@ -1037,15 +1046,54 @@ const Oido = {
     }
     return this.puntaje({clave: v.clave.slice(0, m)}, cola.slice(-(m+2)));
   },
+  // Palabras que sirven de guía: largas y que no se repiten en los versos de alrededor.
+  anclasDe(g){
+    const cerca = new Set();
+    for (let h = Math.max(0, actual); h <= Math.min(versos.length-1, actual+4); h++) if (h !== g) versos[h].clave.forEach(w=>cerca.add(w));
+    return versos[g].clave.filter(w=>w.length >= 5 && ![...cerca].some(c=>sim(c,w) >= .8));
+  },
+  // ¿Se oyeron dos palabras seguidas del verso (en orden)?
+  parSeguido(v, cola){
+    for (let i=0;i+1<v.clave.length;i++){
+      const a=v.clave[i], b=v.clave[i+1]; if (a.length+b.length < 7) continue;
+      for (let j=0;j+1<cola.length;j++) if (sim(a,cola[j])>=.8 && sim(b,cola[j+1])>=.8) return a.length+b.length;
+    }
+    return 0;
+  },
+  // Con mucho ruido o muchas voces: se agarra de una palabra clave o de dos seguidas
+  // de los versos que vienen (nunca de más abajo), y avanza al más cercano.
+  porAnclas(cola){
+    cola = cola.slice(-8); if (!cola.length) return -1;
+    for (let d=1; d<=3; d++){
+      const g = actual + d; if (g >= versos.length) break;
+      const v = versos[g];
+      const anclas = this.anclasDe(g).filter(w=>cola.some(c=>sim(w,c) >= .86));
+      const par = this.parSeguido(v, cola);
+      if (d === 1 && (anclas.length || par)) return g;
+      if (d === 2 && (par >= 9 || anclas.length >= 2 || (par && anclas.length))) return g;
+      if (d === 3 && par >= 9 && anclas.length) return g;
+    }
+    return -1;
+  },
   terminoVerso(v, todas){
     const fin = v.clave.slice(-2); if (!fin.length) return false;
     const cola = todas.slice(-4); return fin.every(w=>cola.some(c=>sim(w,c)>=.85));
+  },
+  // Orden de voz: "vamos de arriba" (o "desde arriba", "desde el principio") vuelve al comienzo.
+  ordenArriba(cola){
+    const t = " " + cola.slice(-8).join(" ") + " ";
+    const frases = [" vamos de arriba ", " vamos desde arriba ", " de nuevo de arriba ", " otra vez de arriba ", " desde el principio ", " vamos del principio ", " vamos desde el principio "];
+    const f = frases.find(x=>t.includes(x)); if (!f) return false;
+    // Si la canción misma dice esa frase, no es una orden.
+    if (versos.some(v=>(" " + v.clave.join(" ") + " ").includes(f.replace(/ (de|el|del) /g," ").trim()) && f.split(" ").filter(w=>w.length>=3).every(w=>v.clave.includes(w)))) return false;
+    return true;
   },
   evaluar(){
     if (!versos.length) return;
     const todas = this.todas();
     $("#oido").textContent = todas.slice(-10).join(" ");
     let cola = todas.slice(Math.min(this.corte, todas.length));
+    if (this.ordenArriba(cola)){ actual = -1; this.corte = todas.length; this.ultMov = Date.now(); pintar(true); return; }
     // Antes de pasar al verso siguiente, se espera el final del verso que se está cantando
     // cuando los dos empiezan parecido (repeticiones, "bis"): solo cuentan las palabras de después.
     if (actual >= 0 && actual+1 < versos.length){
@@ -1076,6 +1124,7 @@ const Oido = {
         if (p >= umbral){ mejor = g; mp = p; break; }
       }
     }
+    if (mejor < 0 && nivel.anclas) mejor = this.porAnclas(cola);
     // Retomar: si ya se escucharon varias palabras que no son el verso que sigue
     // (habló, cantó otro, cambió la letra, terminó y volvió al estribillo), busca dónde se retomó.
     // Reconoce un verso entero o su comienzo (las primeras 4 palabras), para ubicarse rápido.
@@ -1095,6 +1144,7 @@ const Oido = {
         let elegido = -1, mejorVal = -1;
         for (let g = 0; g < versos.length; g++){
           if (g === actual || g === actual+1 || g === actual+2) continue;
+          if (nivel.enOrden && g < actual && !alFinal) continue;
           const v = versos[g]; if (v.clave.length < 3) continue;
           const completo = this.puntaje(v, tail.slice(-(v.clave.length+3)));
           let comienzo = 0;
@@ -1104,7 +1154,7 @@ const Oido = {
           }
           const p = Math.max(completo, comienzo);
           const adelante = g > actual;
-          const trabado = Date.now() - this.ultMov > 12000 && n >= 5 ? .06 : 0;
+          const trabado = Date.now() - this.ultMov > 8000 && n >= 5 ? .06 : 0;
           const umbral = (adelante ? nivel.retomar : Math.max(nivel.retomar, .84)) - trabado;
           if (p < umbral || p < ref + .08) continue;
           const dist = adelante ? (g - actual) * .004 : .03 + (actual - g) * .004;
@@ -1122,11 +1172,11 @@ const Ajustes = { pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("at
 function aplicarNivel(){
   nivel = NIVELES[Ajustes.nivel] || NIVELES.normal;
   const b = $("#btnNivel"); b.textContent = "Oído: " + nivel.nombre;
-  b.classList.toggle("banda", Ajustes.nivel==="banda"); b.classList.toggle("ruido", Ajustes.nivel==="ruido");
+  b.classList.toggle("banda", Ajustes.nivel==="banda"); b.classList.toggle("ruido", Ajustes.nivel==="ruido" || Ajustes.nivel==="grupo");
 }
 $("#btnNivel").onclick = e=>{
   e.stopPropagation();
-  const orden = ["normal","banda","ruido"];
+  const orden = ["normal","banda","ruido","grupo"];
   Ajustes.nivel = orden[(orden.indexOf(Ajustes.nivel)+1) % orden.length];
   ls.set("atril.nivel", Ajustes.nivel); aplicarNivel();
 };
@@ -1145,7 +1195,7 @@ const Mic = {
   pistaFalla: ls.get("atril.sinFiltro", false),
   conSonido:0,    // milisegundos seguidos con sonido fuerte sin que llegue texto
   inicioPista:0, textosConPista:0,
-  local:false, errRed:[],
+  local:false, errRed:[], ultReinicio:0, fallos:0, anduvo:false,
   get on(){ return this.quiere; },
   async preparar(){ try{ if (window.claude && claude.use) this.dict = await claude.use("dictation"); }catch(e){ this.dict=null; } },
   usarNativo(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; return SR && (!this.enMarco || !this.dict) ? SR : null; },
@@ -1167,12 +1217,19 @@ const Mic = {
       if (this.pista && this.textosConPista === 0 && (conFiltro > 10000 || (!this.vivo && conFiltro > 3000))){
         this.dejarFiltro(this.conSonido >= 3000); this.reiniciar(); return;
       }
-      if (!this.vivo){ this.encender(true); return; }
+      pedirPantalla();
+      if (!this.vivo){
+        // Apagado: se vuelve a prender. Si lleva rato sin poder, se arma de cero.
+        if (Date.now() - this.ultimo > 4000) this.reiniciar(); else this.encender(true);
+        return;
+      }
       const quieto = Date.now() - this.ultimo;
-      // Se está cantando (hay sonido) pero no llega texto: el reconocedor se trabó.
-      if (this.rec && sonido && quieto > 4500) { this.reiniciar(); return; }
+      // No se reinicia seguido: cada reinicio deja un hueco en el que no escucha.
+      const reciente = Date.now() - this.ultReinicio < 10000;
+      // Hay sonido pero no llega texto hace rato (y no es un solo de guitarra corto): se trabó.
+      if (this.rec && sonido && quieto > 6500 && !reciente) { this.reiniciar(); return; }
       // A veces el teléfono deja el micrófono "prendido" pero no manda más nada: se lo reinicia.
-      if (this.rec && quieto > 7000) this.reiniciar();
+      if (this.rec && quieto > (this.an ? 10000 : 7000) && !reciente) this.reiniciar();
     }, 1500);
   },
   // Arma el filtro de voz (si el teléfono lo permite). Devuelve la pista filtrada o null.
@@ -1223,10 +1280,10 @@ const Mic = {
   // Arranca un reconocedor: con la pista filtrada si se puede; si no, con el micrófono común.
   iniciar(r){
     if (this.pista && this.pista.readyState === "live" && !this.pistaFalla){
-      try{ r.start(this.pista); return; }
+      try{ r.start(this.pista); return true; }
       catch(e){ this.dejarFiltro(true); }
     }
-    try{ r.start(); }catch(e){}
+    try{ r.start(); return true; }catch(e){ return false; }
   },
   encender(desdeGuardia){
     const SR = this.usarNativo();
@@ -1240,10 +1297,14 @@ const Mic = {
       if (!this.rec){
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
         if (this.local) { try{ r.processLocally = true; }catch(e){} }
-        r.onstart = ()=>{ this.vivo = true; this.ultimo = Date.now(); this.ui(); };
-        r.onresult = ev=>{ this.ultimo = Date.now(); if (this.pista) this.textosConPista++; this.conSonido = 0;
+        r.onstart = ()=>{ this.vivo = true; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
+        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; if (this.pista) this.textosConPista++; this.conSonido = 0;
           let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const t=ev.results[i][0].transcript; if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
+          // Una vez que anduvo, un "sin permiso" suelto es un corte del teléfono: se reintenta.
+          if ((ev.error==="not-allowed" || ev.error==="service-not-allowed" || ev.error==="audio-capture") && !this.pista && this.anduvo && this.fallos < 20){
+            this.fallos++; setTimeout(()=>{ if (this.quiere && this.rec === r) this.reiniciar(); }, Math.min(3000, 400*this.fallos)); return;
+          }
           if ((ev.error==="not-allowed" || ev.error==="service-not-allowed") && !this.pista){ this.quiere=false; this.vivo=false; clearInterval(this.guardia); this.rec=null; this.soltarPista(); this.ui(); sinMic(); return; }
           // Si el filtro no le gusta a este teléfono, se vuelve al micrófono común y se recuerda.
           if (this.pista && ["audio-capture","not-allowed","service-not-allowed","bad-grammar","language-not-supported"].includes(ev.error)){
@@ -1254,8 +1315,9 @@ const Mic = {
           if (this.local && ev.error === "language-not-supported"){ this.local = false; setTimeout(()=>this.reiniciar(), 100); }
           // "no-speech", "aborted": se vuelve a prender solo en onend
         };
-        r.onend = ()=>{ if (this.rec !== r) return; this.vivo = false; Oido.finParcial();
-          if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo && this.rec === r) this.iniciar(r); }, 50); };
+        r.onend = ()=>{ if (this.rec !== r) return; this.vivo = false; Oido.nuevaSesion();
+          // Se vuelve a prender enseguida; si el teléfono no lo deja, se arma uno nuevo.
+          if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo && this.rec === r && !this.iniciar(r)) setTimeout(()=>this.reiniciar(), 250); }, 30); };
         this.rec = r; this.arranques++;
       }
       this.iniciar(this.rec);
@@ -1293,8 +1355,8 @@ const Mic = {
   },
   // Tira el reconocedor trabado y arma uno nuevo.
   reiniciar(){
-    const viejo = this.rec; this.rec = null; this.vivo = false; this.ultimo = Date.now();
-    Oido.finParcial();
+    const viejo = this.rec; this.rec = null; this.vivo = false; this.ultimo = Date.now(); this.ultReinicio = Date.now();
+    Oido.nuevaSesion();
     if (viejo){ viejo.onend = null; viejo.onresult = null; viejo.onerror = null; try{ viejo.abort(); }catch(e){} }
     if (this.quiere) this.encender(true);
   },
