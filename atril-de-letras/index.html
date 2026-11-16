@@ -32,7 +32,8 @@
   header.barra h1{font-size:20px;margin:0;flex:1;letter-spacing:.3px}
   .cont{padding:16px;display:flex;flex-direction:column;gap:12px;max-width:760px;width:100%;margin:0 auto}
   .cancion{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
-  .cancion .t{flex:1;font-size:18px;font-weight:600;min-width:0}
+  .cancion{flex-wrap:wrap;justify-content:flex-end}
+  .cancion .t{flex:1 1 100%;font-size:18px;font-weight:600;min-width:0}
   .cancion .s{color:var(--dim);font-size:13px;font-weight:400;display:block;margin-top:2px}
   .cancion button{padding:10px 12px}
   .repLista{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
@@ -452,6 +453,7 @@ function pintarLista(){
       return `<div class="cancion" data-id="${s.id}">
         <div class="t">${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
         ${ordenLista === "mio" ? '<button data-acc="sub" aria-label="Subir">↑</button><button data-acc="baj" aria-label="Bajar">↓</button>' : ''}
+        <button data-acc="comp" aria-label="Compartir por WhatsApp">Compartir</button>
         <button data-acc="edit">Editar</button>
         <button class="pri" data-acc="tocar">Cantar</button></div>`;
     }).join("");
@@ -465,6 +467,7 @@ $("#canciones").addEventListener("click", async e=>{
   const id = b.closest(".cancion").dataset.id;
   const idx = Store.songs.findIndex(s=>s.id===id);
   if (b.dataset.acc==="edit") abrirEditor(Store.songs[idx]);
+  if (b.dataset.acc==="comp") compartirCancion(Store.songs[idx]);
   if (b.dataset.acc==="tocar") abrirEscena(idx);
   const mover = async (j)=>{
     if (j < 0 || j >= Store.songs.length) return;
@@ -1390,9 +1393,10 @@ function abrirAjustes(){
       <select id="ajIdioma">
         ${[["es-AR","Castellano (Argentina)"],["es-ES","Castellano (España)"],["es-MX","Castellano (México)"],["pt-BR","Portugués (Brasil)"],["qu","Quechua (si el teléfono lo admite)"]].map(([v,t])=>`<option value="${v}" ${v===Ajustes.idioma?"selected":""}>${t}</option>`).join("")}
       </select></label>
-    <div class="fila"><button data-r="ok" class="pri">Listo</button></div>
+    <div class="fila"><button data-r="comp">Compartir esta canción</button><button data-r="ok" class="pri">Listo</button></div>
     <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
   modal(html(), async r=>{
+    if (r==="comp"){ compartirCancion(cancion); return; }
     if (r==="+1" || r==="-1"){
       cancion.tono = (((semis() + (+r)) % 12) + 18) % 12 - 6; // queda entre -6 y +5
       $("#ajTono").textContent = etiquetaTono() || "Original"; pintar(true);
@@ -1475,9 +1479,51 @@ $("#inImportar").onchange = async e=>{
   e.target.value = "";
 };
 
+/* ---------- compartir una canción (por WhatsApp u otra app) ---------- */
+// La canción viaja dentro del enlace, comprimida. Quien lo abre con el Atril la puede guardar.
+const deB64url = t => Uint8Array.from(atob(t.replace(/-/g,"+").replace(/_/g,"/")), c=>c.charCodeAt(0));
+async function comprimir(txt){
+  const s = new Blob([new TextEncoder().encode(txt)]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function descomprimir(u8){
+  const s = new Blob([u8]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return await new Response(s).text();
+}
+async function compartirCancion(s){
+  if (!s) return;
+  let url;
+  try{
+    const datos = await comprimir(JSON.stringify({t:s.titulo||"", a:s.artista||"", l:s.letra||"", o:s.tono||0}));
+    let enc = ""; for (let i=0;i<datos.length;i+=8000) enc += String.fromCharCode(...datos.subarray(i, i+8000));
+    url = URL_APP + "#c=" + btoa(enc).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  }catch(e){ modal('<p>No pude preparar la canción para compartir.</p><div class="fila"><button data-r="ok" class="pri">Entendido</button></div>'); return; }
+  const texto = "Te paso «" + (s.titulo||"una canción") + "»" + (s.artista ? " (" + s.artista + ")" : "") + " para el Atril de letras. Abrí el enlace y tocá «Guardar»:";
+  if (navigator.share){
+    try{ await navigator.share({title: s.titulo || "Atril de letras", text: texto, url}); return; }
+    catch(e){ if (e && e.name==="AbortError") return; }
+  }
+  location.href = "https://wa.me/?text=" + encodeURIComponent(texto + "\n" + url);
+}
+async function recibirCancion(){
+  const m = location.hash.match(/^#c=([A-Za-z0-9_-]+)/); if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  let c;
+  try{ c = JSON.parse(await descomprimir(deB64url(m[1]))); }catch(e){ modal('<p>Ese enlace de canción está incompleto. Pedile a quien te lo mandó que lo comparta de nuevo.</p><div class="fila"><button data-r="ok" class="pri">Entendido</button></div>'); return; }
+  if (!c || !c.l) return;
+  const ya = Store.songs.find(x=>x.letra===c.l);
+  if (ya){ abrirEscena(Store.songs.indexOf(ya)); return; }
+  modal(`<p>Te compartieron <b>${esc(c.t||"una canción")}</b>${c.a ? " (" + esc(c.a) + ")" : ""}.</p><p class="ayuda">¿La guardás en tu Atril?</p>
+    <div class="fila"><button data-r="no">No</button><button class="pri" data-r="si">Guardar</button></div>`, async r=>{
+    if (r!=="si") return;
+    const s = {id:uid(), titulo:c.t||"Sin título", artista:c.a||"", letra:c.l, tono:+c.o||0, orden: Store.songs.reduce((mx,x)=>Math.max(mx, x.orden||0), -1) + 1};
+    await Store.guardar(s); pintarLista(); abrirEscena(Store.songs.findIndex(x=>x.id===s.id));
+  });
+}
+
 /* ---------- arranque ---------- */
 pintarLista();
-Store.init().then(()=>{ pintarLista(); recibirCompartido(); });
+Store.init().then(()=>{ pintarLista(); recibirCompartido(); recibirCancion(); });
 Mic.preparar();
 })();
 </script>
