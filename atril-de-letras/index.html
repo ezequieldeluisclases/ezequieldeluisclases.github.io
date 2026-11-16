@@ -103,6 +103,8 @@
   #nav{display:flex;gap:8px;padding:8px 10px 10px;border-top:1px solid var(--line)}
   #nav button{flex:1;padding:14px 6px;font-size:16px}
   #oido{font-size:12px;color:#5d574e;padding:0 18px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:16px}
+  #avisoLocal{display:none;margin:8px 18px;padding:10px 14px;border-radius:12px;background:#14202b;border:1px solid #2f4a63;color:#cfe6ff;text-align:center;font-size:14px}
+  #avisoLocal.on{display:block}
   #retomar{display:none;margin:8px 18px;padding:14px;border-radius:12px;background:#2b1a10;border:1px solid var(--acc2);color:#ffd9b8;text-align:center;font-size:16px}
   #retomar.on{display:block}
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:20px;z-index:9}
@@ -195,6 +197,7 @@
     <button id="btnMic">Escuchar</button>
   </header>
   <div id="estrofaInfo"><span class="izq"><span id="infoEstrofa"></span><button id="btnNivel" title="Sensibilidad del oído">Oído: Normal</button></span><span class="tonos-barra" id="tonoBarra"><button id="tonoMenos" aria-label="Bajar medio tono">−½</button><span class="tono" id="infoTono"></span><button id="tonoMas" aria-label="Subir medio tono">+½</button></span></div>
+  <div id="avisoLocal"></div>
   <div id="retomar">El micrófono se pausó. Tocá acá para seguir escuchando.</div>
   <div id="letra"></div>
   <div id="oido"></div>
@@ -1025,6 +1028,89 @@ document.addEventListener("keydown", e=>{
   else if (["ArrowLeft","ArrowUp","PageUp","Backspace"].includes(e.key)){ e.preventDefault(); estrofaAnt(); }
 });
 
+/* ---------- reconocedor dentro del teléfono (sin internet) ---------- */
+// Usa Vosk: se baja una sola vez (unos 34 MB) y queda guardado en el teléfono.
+// Escucha sin cortes porque no depende de Google, y se le pasan solo las palabras de la canción.
+function avisoLocal(t){ const a = $("#avisoLocal"); a.textContent = t || ""; a.classList.toggle("on", !!t); }
+const Local = {
+  JS: "https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js",
+  MODELO: "https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-es-0.3.tar.gz",
+  modelo:null, cargando:null, rec:null, ac:null, flujo:null, proc:null, fuente:null,
+  async libreria(){
+    if (window.Vosk && Vosk.createModel) return;
+    let txt = null;
+    try{
+      const c = await caches.open("atril-vosk"); let r = await c.match(this.JS);
+      if (!r){ r = await fetch(this.JS); if (!r.ok) throw new Error("js"); await c.put(this.JS, r.clone()); }
+      txt = await r.text();
+    }catch(e){ const r = await fetch(this.JS); if (!r.ok) throw new Error("js"); txt = await r.text(); }
+    await new Promise((ok, mal)=>{ const sc = document.createElement("script");
+      sc.src = URL.createObjectURL(new Blob([txt], {type:"text/javascript"})); sc.onload = ok; sc.onerror = mal; document.head.appendChild(sc); });
+  },
+  cargar(){
+    if (this.modelo) return Promise.resolve(this.modelo);
+    if (!this.cargando){
+      const primera = !ls.get("atril.voskListo", false);
+      avisoLocal(primera ? "Bajando el reconocedor del teléfono (unos 34 MB, solo esta vez). Puede tardar unos minutos…" : "Preparando el reconocedor del teléfono…");
+      this.cargando = (async()=>{
+        await this.libreria();
+        const m = await Vosk.createModel(this.MODELO, -1);
+        this.modelo = m; ls.set("atril.voskListo", true); avisoLocal(""); return m;
+      })().catch(e=>{ this.cargando = null; avisoLocal(""); throw e; });
+    }
+    return this.cargando;
+  },
+  // Las palabras de la canción (y cada verso entero) son lo único que se espera oír.
+  gramatica(){
+    if (!versos.length) return null;
+    const pal = new Set(), lineas = [];
+    for (const v of versos){
+      const t = v.txt.toLowerCase().replace(/[^a-záéíóúüñ\s]/g," ").replace(/\s+/g," ").trim();
+      if (!t) continue;
+      t.split(" ").forEach(w=>pal.add(w));
+      if (!lineas.includes(t)) lineas.push(t);
+    }
+    return JSON.stringify([...pal, ...lineas.slice(0, 60), "[unk]"]);
+  },
+  armarReconocedor(){
+    if (!this.modelo || !this.ac) return;
+    if (this.rec){ try{ this.rec.remove(); }catch(e){} this.rec = null; }
+    const g = this.gramatica();
+    const r = g ? new this.modelo.KaldiRecognizer(this.ac.sampleRate, g) : new this.modelo.KaldiRecognizer(this.ac.sampleRate);
+    r.on("result", m=>{ const t = m && m.result && m.result.text; Mic.ultimo = Date.now(); if (t && t.replace(/\[unk\]/g,"").trim()) Oido.final(t.replace(/\[unk\]/g," ")); });
+    r.on("partialresult", m=>{ const t = m && m.result && m.result.partial; if (t){ Mic.ultimo = Date.now(); Oido.parcialTxt(t.replace(/\[unk\]/g," ")); } });
+    this.rec = r;
+  },
+  async escuchar(){
+    this.flujo = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:true, autoGainControl:true, channelCount:1}});
+    const AC = window.AudioContext || window.webkitAudioContext;
+    this.ac = new AC(); try{ await this.ac.resume(); }catch(e){}
+    const ac = this.ac, fuente = ac.createMediaStreamSource(this.flujo);
+    const filtro = (tipo, f, q)=>{ const b = ac.createBiquadFilter(); b.type = tipo; b.frequency.value = f; b.Q.value = q; return b; };
+    const g1 = filtro("highpass", 140, .7), a1 = filtro("lowpass", 6000, .7);
+    const comp = ac.createDynamicsCompressor(); comp.threshold.value = -30; comp.ratio.value = 3;
+    this.proc = ac.createScriptProcessor(4096, 1, 1);
+    this.proc.onaudioprocess = e=>{ if (this.rec){ try{ this.rec.acceptWaveform(e.inputBuffer); }catch(err){} } };
+    fuente.connect(g1); g1.connect(a1); a1.connect(comp); comp.connect(this.proc); this.proc.connect(ac.destination);
+    this.fuente = fuente;
+    this.armarReconocedor();
+  },
+  // ¿Sigue entrando sonido? Si el teléfono pausó el audio, se lo despierta.
+  vigilar(){
+    if (!this.ac) return false;
+    if (this.ac.state === "suspended"){ try{ this.ac.resume(); }catch(e){} }
+    const pista = this.flujo && this.flujo.getAudioTracks()[0];
+    return this.ac.state !== "closed" && !!pista && pista.readyState === "live";
+  },
+  soltar(){
+    if (this.rec){ try{ this.rec.remove(); }catch(e){} this.rec = null; }
+    try{ this.proc && (this.proc.onaudioprocess = null); }catch(e){}
+    try{ this.flujo && this.flujo.getTracks().forEach(t=>t.stop()); }catch(e){}
+    try{ this.ac && this.ac.close(); }catch(e){}
+    this.ac = null; this.flujo = null; this.proc = null; this.fuente = null;
+  }
+};
+
 /* ---------- el oído ---------- */
 const Oido = {
   oidas:[], parcial:[], corte:0, ultMov:Date.now(), ultFinal:[],
@@ -1203,7 +1289,7 @@ const Oido = {
     if (mejor>=0){ actual=mejor; this.corte=todas.length; this.ultMov=Date.now(); pintar(); return; }
   }
 };
-const Ajustes = { pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
+const Ajustes = { motor: ls.get("atril.motor", "google"), pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
 function aplicarNivel(){
   nivel = NIVELES[Ajustes.nivel] || NIVELES.normal;
   const b = $("#btnNivel"); b.textContent = "Oído: " + nivel.nombre;
@@ -1239,12 +1325,18 @@ const Mic = {
     if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
   },
   arrancar(){
-    this.quiere = true; this.caido = 0; this.ui(); this.encender(); this.prepararLocal();
+    this.quiere = true; this.caido = 0; this.ui(); this.encender(); if (!this.usaLocal()) this.prepararLocal();
     // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
     clearInterval(this.guardia);
     this.ultimo = Date.now();
     this.guardia = setInterval(()=>{
       if (!this.quiere) return;
+      if (this.usaLocal()){
+        pedirPantalla();
+        if (this.vivo && !Local.vigilar()){ this.vivo = false; Local.soltar(); }
+        if (!this.vivo && !this._armandoL) this.encender(true);
+        return;
+      }
       const sonido = this.haySonido();
       // Con el filtro puesto: si en 10 segundos no llegó ningún texto (o no arrancó),
       // este teléfono no lo acepta. Se vuelve al micrófono común, que siempre anda.
@@ -1325,7 +1417,28 @@ const Mic = {
     }
     try{ r.start(); return true; }catch(e){ return false; }
   },
+  usaLocal(){ return Ajustes.motor === "vosk" && !this.localFalla; },
+  async encenderLocal(){
+    if (this._armandoL || this.vivo) return; this._armandoL = true;
+    try{
+      await Local.cargar();
+      if (!this.quiere) return;
+      Local.soltar(); await Local.escuchar();
+      if (!this.quiere){ Local.soltar(); return; }
+      this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui();
+    }catch(e){
+      Local.soltar();
+      const n = e && e.name;
+      if (n === "NotAllowedError" || n === "SecurityError"){ this.quiere = false; clearInterval(this.guardia); this.ui(); sinMic(); return; }
+      // No se pudo (sin internet la primera vez, teléfono sin memoria…): sigue con el de Google.
+      this.localFalla = true;
+      avisoLocal("No pude preparar el reconocedor del teléfono" + (navigator.onLine ? "" : " (hace falta internet la primera vez)") + ". Sigo con el de Google.");
+      setTimeout(()=>avisoLocal(""), 7000);
+      if (this.quiere) this.encender();
+    }finally{ this._armandoL = false; }
+  },
   encender(desdeGuardia){
+    if (this.usaLocal()){ this.encenderLocal(); return; }
     const SR = this.usarNativo();
     if (SR){
       if (this._armando) return;
@@ -1422,7 +1535,17 @@ const Mic = {
   // Si sin internet entiende mal en este teléfono, se vuelve al reconocedor común y se recuerda.
   dejarLocal(){ this.local = false; ls.set("atril.sinLocal", true); this.reiniciar(); },
   // Canción nueva: el reconocedor sin internet recibe la letra nueva.
-  cambioCancion(){ if (this.quiere && this.local && !this.sinFrases) this.reiniciar(); },
+  cambioCancion(){
+    if (this.usaLocal()){ if (this.vivo) Local.armarReconocedor(); return; }
+    if (this.quiere && this.local && !this.sinFrases) this.reiniciar(); },
+  // Se cambió el reconocedor en Ajustes: se apaga el que estaba y se prende el otro.
+  cambiarMotor(){
+    this.localFalla = false;
+    const prendido = this.quiere;
+    if (prendido) this.parar();
+    if (prendido) this.arrancar();
+    else if (Ajustes.motor === "vosk") Local.cargar().catch(()=>{});
+  },
   async probarLocal(){
     if (this.local) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1430,6 +1553,7 @@ const Mic = {
   },
   // Tira el reconocedor trabado y arma uno nuevo.
   reiniciar(){
+    if (this.usaLocal()){ Local.soltar(); this.vivo = false; this.ultReinicio = Date.now(); Oido.nuevaSesion(); if (this.quiere) this.encender(true); return; }
     const viejo = this.rec; this.rec = null; this.vivo = false; this.ultimo = Date.now(); this.ultReinicio = Date.now();
     Oido.nuevaSesion();
     if (viejo){ viejo.onend = null; viejo.onresult = null; viejo.onerror = null; try{ viejo.abort(); }catch(e){} }
@@ -1439,6 +1563,7 @@ const Mic = {
   revivir(){ if (this.quiere && !this.vivo) this.encender(); },
   parar(){
     this.quiere = false; clearInterval(this.guardia); this.ui();
+    Local.soltar();
     if (this.rec){ try{ this.rec.stop(); }catch(e){} }
     this.soltarPista();
     if (this.dict && this.vivo){ try{ this.dict.stop(); }catch(e){} }
@@ -1467,6 +1592,12 @@ function abrirAjustes(){
       <select id="ajIdioma">
         ${[["es-AR","Castellano (Argentina)"],["es-ES","Castellano (España)"],["es-MX","Castellano (México)"],["pt-BR","Portugués (Brasil)"],["qu","Quechua (si el teléfono lo admite)"]].map(([v,t])=>`<option value="${v}" ${v===Ajustes.idioma?"selected":""}>${t}</option>`).join("")}
       </select></label>
+    <label class="ch" style="flex-wrap:wrap">Reconocimiento de voz:
+      <select id="ajMotor">
+        <option value="google" ${Ajustes.motor!=="vosk"?"selected":""}>Google (necesita internet)</option>
+        <option value="vosk" ${Ajustes.motor==="vosk"?"selected":""}>En el teléfono (sin internet, solo castellano)</option>
+      </select></label>
+    <p class="ayuda" style="margin:-4px 0 4px">«En el teléfono» se baja una sola vez (unos 34 MB) y después anda sin señal, sin cortes y escuchando solo las palabras de la canción.</p>
     <div class="fila"><button data-r="comp">Compartir esta canción</button><button data-r="ok" class="pri">Listo</button></div>
     <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
   modal(html(), async r=>{
@@ -1479,6 +1610,8 @@ function abrirAjustes(){
     Ajustes.idioma = $("#ajIdioma").value;
     ls.set("atril.idioma", Ajustes.idioma);
     if (Mic.rec) Mic.rec.lang = Ajustes.idioma;
+    const motor = $("#ajMotor").value;
+    if (motor !== Ajustes.motor){ Ajustes.motor = motor; ls.set("atril.motor", motor); Mic.cambiarMotor(); }
   });
 }
 
