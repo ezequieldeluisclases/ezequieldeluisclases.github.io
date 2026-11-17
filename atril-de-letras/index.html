@@ -1611,11 +1611,19 @@ const Oido = {
     // Así un estribillo que se repite no lo hace saltar por una sola frase.
     if (!alFinal){
       cola = this.colaLarga || cola;
+      // Si esas mismas palabras están más arriba (un estribillo que se repite), va a la vez más cercana:
+      // la canción se sigue en orden y nunca salta al último estribillo.
+      const masCerca = (g, par)=>{
+        const [x, y] = par.split(" ");
+        if (cur && this.parDe(cur.pal, [x, y])) return -1;
+        for (let h = actual + 1; h < g; h++) if (this.parDe(versos[h].pal, [x, y])) return h;
+        return g;
+      };
       for (let g = actual + 7; g < Math.min(versos.length, actual + 18); g++){
         const a = this.parEn(versos[g-1].pal, cola), b = this.parEn(versos[g].pal, cola);
-        if (a && b && b.fin > a.fin && a.par !== b.par) return g;
+        if (a && b && b.fin > a.fin && a.par !== b.par) return masCerca(g, b.par);
         const c = g+1 < versos.length ? this.parEn(versos[g+1].pal, cola) : null;
-        if (b && c && c.fin > b.fin && b.par !== c.par) return g+1;
+        if (b && c && c.fin > b.fin && b.par !== c.par) return masCerca(g+1, c.par);
       }
     }
     return -1;
@@ -1634,6 +1642,17 @@ const Oido = {
       if (d === 3 && par >= 9 && anclas.length) return g;
     }
     return -1;
+  },
+  // Si el verso elegido más abajo está repetido más arriba (estribillo que aparece en el medio y al final),
+  // se queda con la vez más cercana hacia adelante: la canción se sigue en el orden en que se canta.
+  copiaCercana(g){
+    if (g <= actual + 1) return g;
+    const v = versos[g]; if (!v || !v.clave.length) return g;
+    for (let h = Math.max(0, actual + 1); h < g; h++){
+      const w = versos[h];
+      if (w.clave.length && Math.abs(w.clave.length - v.clave.length) <= 2 && this.puntaje(w, v.clave) >= .8 && this.puntaje(v, w.clave) >= .8) return h;
+    }
+    return g;
   },
   terminoVerso(v, todas){
     const fin = v.clave.slice(-2); if (!fin.length) return false;
@@ -1685,8 +1704,10 @@ const Oido = {
         if (p >= umbral){ mejor = g; mp = p; break; }
       }
     }
-    if (mejor < 0) mejor = this.porPares(cola);
-    if (mejor < 0 && nivel.anclas) mejor = this.porAnclas(cola);
+    let via = mejor >= 0 ? "en orden" : "";
+    if (mejor < 0){ mejor = this.porPares(cola); if (mejor >= 0) via = "dos palabras"; }
+    if (mejor < 0 && nivel.anclas){ mejor = this.porAnclas(cola); if (mejor >= 0) via = "palabra clave"; }
+    if (mejor < 0) via = "retomó";
     // Retomar: si ya se escucharon varias palabras que no son el verso que sigue
     // (habló, cantó otro, cambió la letra, terminó y volvió al estribillo), busca dónde se retomó.
     // Reconoce un verso entero o su comienzo (las primeras 4 palabras), para ubicarse rápido.
@@ -1724,11 +1745,14 @@ const Oido = {
           const val = p - dist;
           if (val > mejorVal){ mejorVal = val; elegido = g; }
         }
-        if (elegido >= 0) mejor = elegido;
+        if (elegido >= 0) mejor = this.copiaCercana(elegido);
       }
     }
     // Las palabras ya usadas (incluidas las provisorias) no cuentan para el verso siguiente.
-    if (mejor>=0){ actual=mejor; this.corte=todas.length; this.ultMov=Date.now(); this.avisarOtro(); pintar(); return; }
+    if (mejor>=0){
+      // Los saltos grandes quedan anotados en el informe, para poder ver por qué pasó.
+      if (mejor - actual > 3 || mejor < actual) RegMic.anotar("salto del verso " + (actual+1) + " al " + (mejor+1) + " (" + via + (this === Oido ? ", Google" : ", teléfono") + "): «" + todas.slice(-10).join(" ") + "»");
+      actual=mejor; this.corte=todas.length; this.ultMov=Date.now(); this.avisarOtro(); pintar(); return; }
   }
 };
 // Segundo oído (reconocedor del teléfono) con su propio registro: así sus palabras no se mezclan con las de Google.
@@ -2136,7 +2160,7 @@ function abrirAjustes(){
       </select></label>
     <label class="ch"><input type="checkbox" id="ajDoble" ${Ajustes.doble?"checked":""}> Doble oído: Google y el teléfono a la vez</label>
     <p class="ayuda" style="margin:-4px 0 4px">${Mic.segundo ? "Ahora: Google entendió " + Mic.textosG + " veces y el teléfono " + Local.textos + "." : "Escuchan los dos y la app se guía por el que primero acierte. Si tu teléfono no lo permite, vuelve solo a Google y te avisa."}</p>
-    <div class="fila"><button data-r="inf">Copiar informe del micrófono</button></div>
+    <div class="fila"><button data-r="inf">Copiar informe (micrófono y saltos)</button></div>
     <div class="fila"><button data-r="comp">Compartir esta canción</button><button data-r="ok" class="pri">Listo</button></div>
     <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
   modal(html(), async r=>{
