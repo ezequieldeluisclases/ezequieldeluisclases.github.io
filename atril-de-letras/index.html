@@ -81,7 +81,9 @@
   .verso.con-ac{line-height:1.95;white-space:pre-wrap;padding-top:.3em;padding-bottom:.05em}
   .verso.pasado{color:var(--done)}
   .verso.actual{background:#2a2213;color:#fff;box-shadow:inset 4px 0 0 var(--acc)}
-  .verso.cantando{color:#b3aa9a;box-shadow:inset 4px 0 0 #6b5729;background:#17150f}
+  /* El verso que se está cantando: celeste, con el mismo brillo que los dos que siguen (amarillos). */
+  .verso.cantando{color:#fff;box-shadow:inset 4px 0 0 #5cc8f2;background:#10262f}
+  .verso.cantando + .verso.actual{border-top-left-radius:0;border-top-right-radius:0;margin-top:-2px}
   .verso.actual + .verso.actual{border-top-left-radius:0;border-top-right-radius:0;margin-top:-2px}
   .estrofa{padding:6px 0 14px;border-bottom:1px solid var(--line);margin-bottom:10px}
   .estrofa:last-of-type{border-bottom:0}
