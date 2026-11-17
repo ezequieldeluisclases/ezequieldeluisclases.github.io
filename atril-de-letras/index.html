@@ -1037,7 +1037,8 @@ function avisoLocal(t){ const a = $("#avisoLocal"); a.textContent = t || ""; a.c
 const Local = {
   JS: "https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js",
   MODELO: "https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-es-0.3.tar.gz",
-  modelo:null, cargando:null, rec:null, ac:null, flujo:null, proc:null, fuente:null,
+  modelo:null, cargando:null, rec:null, ac:null, flujo:null, proc:null, fuente:null, textos:0,
+  destino(){ return Mic.usaLocal() ? Oido : OidoB; },
   async libreria(){
     if (window.Vosk && Vosk.createModel) return;
     let txt = null;
@@ -1079,8 +1080,8 @@ const Local = {
     if (this.rec){ try{ this.rec.remove(); }catch(e){} this.rec = null; }
     // Escucha todo el castellano: la app después compara con la letra (con gramática cerrada, al cantar respondía casi todo "no sé").
     const r = new this.modelo.KaldiRecognizer(this.ac.sampleRate);
-    r.on("result", m=>{ const t = m && m.result && m.result.text; Mic.ultimo = Date.now(); if (t && t.replace(/\[unk\]/g,"").trim()) Oido.final(t.replace(/\[unk\]/g," ")); });
-    r.on("partialresult", m=>{ const t = m && m.result && m.result.partial; if (t){ Mic.ultimo = Date.now(); Oido.parcialTxt(t.replace(/\[unk\]/g," ")); } });
+    r.on("result", m=>{ const t = m && m.result && m.result.text; if (Mic.usaLocal()) Mic.ultimo = Date.now(); if (t && t.replace(/\[unk\]/g,"").trim()){ Local.textos++; Local.destino().final(t.replace(/\[unk\]/g," ")); } });
+    r.on("partialresult", m=>{ const t = m && m.result && m.result.partial; if (t){ if (Mic.usaLocal()) Mic.ultimo = Date.now(); Local.destino().parcialTxt(t.replace(/\[unk\]/g," ")); } });
     this.rec = r;
   },
   // El audio se prepara en el mismo toque del botón: si no, el teléfono lo deja en pausa.
@@ -1128,9 +1129,11 @@ const Local = {
 /* ---------- el oído ---------- */
 const Oido = {
   oidas:[], parcial:[], corte:0, ultMov:Date.now(), ultFinal:[],
-  reiniciar(){ this.oidas=[]; this.parcial=[]; this.corte=0; this.ultFinal=[]; },
+  reiniciar(){ this.oidas=[]; this.parcial=[]; this.corte=0; this.ultFinal=[]; if (this === Oido && window.OidoB) OidoB.reiniciar(); },
   nuevaSesion(){ this.finParcial(); this.ultFinal=[]; },
-  cortar(){ this.corte = this.oidas.length + this.parcial.length; this.ultMov = Date.now(); },
+  cortar(){ this.corte = this.oidas.length + this.parcial.length; this.ultMov = Date.now(); if (this === Oido && window.OidoB) OidoB.cortar(); },
+  // Con doble oído: cuando uno de los dos mueve el verso, el otro empieza de cero desde ahí.
+  avisarOtro(){ const otro = this === Oido ? window.OidoB : Oido; if (otro && otro !== this){ otro.corte = otro.oidas.length + otro.parcial.length; otro.ultMov = Date.now(); } },
   todas(){ return this.oidas.concat(this.parcial); },
   // Si el reconocedor se corta, lo provisorio se da por oído.
   finParcial(){ if (this.parcial.length){ const base=this.oidas.length; this.oidas.push(...this.parcial); this.parcial=[]; this.corte=Math.min(this.corte, this.oidas.length); } },
@@ -1254,7 +1257,7 @@ const Oido = {
     const todas = this.todas();
     $("#oido").textContent = todas.slice(-10).join(" ");
     let cola = todas.slice(Math.min(this.corte, todas.length));
-    if (this.ordenArriba(cola)){ actual = -1; this.corte = todas.length; this.ultMov = Date.now(); pintar(true); return; }
+    if (this.ordenArriba(cola)){ actual = -1; this.corte = todas.length; this.ultMov = Date.now(); this.avisarOtro(); pintar(true); return; }
     // Antes de pasar al verso siguiente, se espera el final del verso que se está cantando
     // cuando los dos empiezan parecido (repeticiones, "bis"): solo cuentan las palabras de después.
     if (actual >= 0 && actual+1 < versos.length){
@@ -1328,10 +1331,12 @@ const Oido = {
       }
     }
     // Las palabras ya usadas (incluidas las provisorias) no cuentan para el verso siguiente.
-    if (mejor>=0){ actual=mejor; this.corte=todas.length; this.ultMov=Date.now(); pintar(); return; }
+    if (mejor>=0){ actual=mejor; this.corte=todas.length; this.ultMov=Date.now(); this.avisarOtro(); pintar(); return; }
   }
 };
-const Ajustes = { motor: ls.get("atril.motor", "google"), pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
+// Segundo oído (reconocedor del teléfono) con su propio registro: así sus palabras no se mezclan con las de Google.
+window.OidoB = Object.create(Oido); OidoB.oidas=[]; OidoB.parcial=[]; OidoB.corte=0; OidoB.ultFinal=[]; OidoB.ultMov=Date.now();
+const Ajustes = { doble: ls.get("atril.doble", false), motor: ls.get("atril.motor", "google"), pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
 function aplicarNivel(){
   nivel = NIVELES.unico; $("#btnNivel").style.display = "none"; return;
   const b = $("#btnNivel"); b.textContent = "Oído: " + nivel.nombre;
@@ -1367,7 +1372,10 @@ const Mic = {
     if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
   },
   arrancar(){
-    this.quiere = true; this.caido = 0; this.ui(); if (this.usaLocal()) Local.prepararAudio(); this.encender();
+    this.quiere = true; this.caido = 0; this.ui(); this.dobleFalla = false;
+    if (this.usaLocal() || this.dobleActivo()) Local.prepararAudio();
+    this.encender();
+    if (this.dobleActivo()) this.arrancarSegundo();
     // Guardia: si el micrófono se apaga solo (silencio, cortes del teléfono), lo vuelve a prender.
     clearInterval(this.guardia);
     this.ultimo = Date.now();
@@ -1379,6 +1387,8 @@ const Mic = {
         if (!this.vivo && !this._armandoL) this.encender(true);
         return;
       }
+      if (this.segundo && !Local.vigilar()){ this.segundo = false; Local.soltar(); }
+      if (!this.segundo && this.dobleActivo() && !this._armando2) this.arrancarSegundo();
       const sonido = this.haySonido();
       // Con el filtro puesto: si en 10 segundos no llegó ningún texto (o no arrancó),
       // este teléfono no lo acepta. Se vuelve al micrófono común, que siempre anda.
@@ -1463,10 +1473,47 @@ const Mic = {
     try{ r.start(); return true; }catch(e){ return false; }
   },
   // Google siempre; si se corta la señal (o el teléfono no tiene el de Google), el del teléfono.
-  modoLocal:false,
+  modoLocal:false, segundo:false, textosG:0,
+  dobleActivo(){ return Ajustes.doble && !this.usaLocal() && !this.dobleFalla; },
+  // Prende el reconocedor del teléfono al lado del de Google y, a los 12 segundos, revisa que anden los dos.
+  async arrancarSegundo(){
+    if (this._armando2 || this.segundo || !this.dobleActivo()) return;
+    this._armando2 = true;
+    try{
+      await Local.cargar();
+      if (!this.quiere || !this.dobleActivo()) return;
+      Local.soltar(); OidoB.reiniciar(); await Local.escuchar();
+      this.segundo = true; Local.textos = 0; this.textosG = 0;
+      avisoLocal("Doble oído: escuchando con Google y con el teléfono.");
+      clearTimeout(this._revisar2);
+      this._revisar2 = setTimeout(()=>this.revisarDoble(), 12000);
+    }catch(e){
+      Local.soltar(true); this.segundo = false; this.dobleFalla = true;
+      avisoLocal("Doble oído: no pude prender el segundo micrófono" + (navigator.onLine ? "" : " (hace falta internet la primera vez)") + ". Sigo solo con Google.");
+      setTimeout(()=>avisoLocal(""), 7000);
+    }finally{ this._armando2 = false; }
+  },
+  revisarDoble(){
+    if (!this.quiere || !this.segundo) return;
+    const g = this.textosG, t = Local.textos, sonido = Local.conSonido;
+    if (!sonido){ this.cortarSegundo("el segundo micrófono no recibe sonido en este teléfono"); return; }
+    if (g === 0 && t > 0){
+      // El teléfono le sacó el micrófono a Google: se queda con el del teléfono, que sí anda.
+      this.cortarSegundo(""); this.modoLocal = true; avisoLocal("Doble oído: Google dejó de escuchar con los dos prendidos. Sigo con el del teléfono."); this.reiniciar(); return;
+    }
+    avisoLocal(t > 0 ? "Doble oído funcionando: los dos están escuchando." : "Doble oído: el teléfono escucha, pero todavía no entendió palabras.");
+    setTimeout(()=>{ if ($("#avisoLocal").textContent.startsWith("Doble oído")) avisoLocal(""); }, 6000);
+  },
+  cortarSegundo(motivo){
+    clearTimeout(this._revisar2);
+    if (this.segundo || Local.flujo) Local.soltar(true);
+    this.segundo = false; this.dobleFalla = true;
+    if (motivo){ avisoLocal("Doble oído: " + motivo + ". Sigo solo con Google."); setTimeout(()=>avisoLocal(""), 8000); }
+  },
   usaLocal(){ return this.modoLocal && !this.localFalla; },
   pasarALocal(){
     if (this.modoLocal || this.localFalla) return;
+    clearTimeout(this._revisar2); this.segundo = false;
     this.modoLocal = true;
     avisoLocal("Sin señal: sigo escuchando con el reconocedor del teléfono.");
     setTimeout(()=>{ if ($("#avisoLocal").textContent.startsWith("Sin señal")) avisoLocal(""); }, 5000);
@@ -1476,7 +1523,7 @@ const Mic = {
     if (!this.modoLocal || !this.usarNativo()) return;
     this.modoLocal = false; this.errRed = [];
     Local.soltar(true);
-    if (this.quiere){ this.vivo = false; this.rec = null; this.encender(true); }
+    if (this.quiere){ this.vivo = false; this.rec = null; this.encender(true); if (this.dobleActivo()) this.arrancarSegundo(); }
   },
   // Deja bajado el reconocedor del teléfono (una sola vez, con wifi) para cuando falte la señal.
   bajarDeAntemano(){
@@ -1519,10 +1566,11 @@ const Mic = {
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=5;
         if (this.local) { try{ r.processLocally = true; }catch(e){} this.ponerFrases(r); }
         r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
-        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.trabasLocal = 0; if (this.local) this.textoLocal = true; this.bajarDeAntemano(); if (this.pista) this.textosConPista++; this.conSonido = 0;
+        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.textosG++; this.trabasLocal = 0; if (this.local) this.textoLocal = true; this.bajarDeAntemano(); if (this.pista) this.textosConPista++; this.conSonido = 0;
           let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i], alts=[]; for (let j=0;j<res.length;j++) alts.push(res[j].transcript); const t=Oido.elegir(alts); if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
           // Una vez que anduvo, un "sin permiso" suelto es un corte del teléfono: se reintenta.
+          if (ev.error==="audio-capture" && this.segundo){ this.cortarSegundo("Google no puede escuchar con los dos prendidos en este teléfono"); setTimeout(()=>this.reiniciar(), 300); return; }
           if ((ev.error==="not-allowed" || ev.error==="service-not-allowed" || ev.error==="audio-capture") && !this.pista && this.anduvo && this.fallos < 20){
             this.fallos++; setTimeout(()=>{ if (this.quiere && this.rec === r) this.reiniciar(); }, Math.min(3000, 400*this.fallos)); return;
           }
@@ -1632,7 +1680,7 @@ const Mic = {
   revivir(){ if (this.quiere && !this.vivo) this.encender(); },
   parar(){
     this.quiere = false; clearInterval(this.guardia); this.ui();
-    Local.soltar(true); avisoLocal("");
+    Local.soltar(true); avisoLocal(""); clearTimeout(this._revisar2); this.segundo = false;
     if (this.rec){ try{ this.rec.stop(); }catch(e){} }
     this.soltarPista();
     if (this.dict && this.vivo){ try{ this.dict.stop(); }catch(e){} }
@@ -1662,6 +1710,8 @@ function abrirAjustes(){
       <select id="ajIdioma">
         ${[["es-AR","Castellano (Argentina)"],["es-ES","Castellano (España)"],["es-MX","Castellano (México)"],["pt-BR","Portugués (Brasil)"],["qu","Quechua (si el teléfono lo admite)"]].map(([v,t])=>`<option value="${v}" ${v===Ajustes.idioma?"selected":""}>${t}</option>`).join("")}
       </select></label>
+    <label class="ch"><input type="checkbox" id="ajDoble" ${Ajustes.doble?"checked":""}> Doble oído (prueba): Google y el teléfono a la vez</label>
+    <p class="ayuda" style="margin:-4px 0 4px">${Mic.segundo ? "Ahora: Google entendió " + Mic.textosG + " veces y el teléfono " + Local.textos + "." : "Escuchan los dos y la app se guía por el que primero acierte. Si tu teléfono no lo permite, vuelve solo a Google y te avisa."}</p>
     <div class="fila"><button data-r="comp">Compartir esta canción</button><button data-r="ok" class="pri">Listo</button></div>
     <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
   modal(html(), async r=>{
@@ -1670,6 +1720,12 @@ function abrirAjustes(){
       cancion.tono = (((semis() + (+r)) % 12) + 18) % 12 - 6; // queda entre -6 y +5
       $("#ajTono").textContent = etiquetaTono() || "Original"; pintar(true);
       Store.guardar(cancion); return;
+    }
+    const doble = $("#ajDoble").checked;
+    if (doble !== Ajustes.doble){
+      Ajustes.doble = doble; ls.set("atril.doble", doble); Mic.dobleFalla = false;
+      if (doble && Mic.quiere){ Local.prepararAudio(); Mic.arrancarSegundo(); }
+      if (!doble && Mic.segundo){ clearTimeout(Mic._revisar2); Local.soltar(true); Mic.segundo = false; avisoLocal(""); }
     }
     Ajustes.idioma = $("#ajIdioma").value;
     ls.set("atril.idioma", Ajustes.idioma);
