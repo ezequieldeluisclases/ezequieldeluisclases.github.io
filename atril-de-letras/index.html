@@ -1472,7 +1472,9 @@ const Local = {
     this.inicio = Date.now(); this.conSonido = false;
     const ac = this.ac, fuente = ac.createMediaStreamSource(this.flujo);
     const filtro = (tipo, f, q)=>{ const b = ac.createBiquadFilter(); b.type = tipo; b.frequency.value = f; b.Q.value = q; return b; };
-    const g1 = filtro("highpass", 140, .7), a1 = filtro("lowpass", 6000, .7);
+    // Corta abajo de 200 Hz (bordones de la guitarra, golpes en la caja) con doble filtro para que caiga rápido,
+    // y arriba de 6000 Hz (chasquido de las cuerdas). La voz que hace falta para entender palabras queda entera.
+    const g1 = filtro("highpass", 200, .7), g1b = filtro("highpass", 200, .7), a1 = filtro("lowpass", 6000, .7);
     const comp = ac.createDynamicsCompressor(); comp.threshold.value = -30; comp.ratio.value = 3;
     this.proc = ac.createScriptProcessor(4096, 1, 1);
     this.proc.onaudioprocess = e=>{
@@ -1480,7 +1482,7 @@ const Local = {
       if (m > .003) this.conSonido = true;
       if (m > .06) this.ultFuerte = Date.now();
       if (this.rec){ try{ this.rec.acceptWaveform(e.inputBuffer); }catch(err){} } };
-    fuente.connect(g1); g1.connect(a1); a1.connect(comp); comp.connect(this.proc); this.proc.connect(ac.destination);
+    fuente.connect(g1); g1.connect(g1b); g1b.connect(a1); a1.connect(comp); comp.connect(this.proc); this.proc.connect(ac.destination);
     this.fuente = fuente;
     this.armarReconocedor();
   },
