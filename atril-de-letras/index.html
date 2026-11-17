@@ -243,7 +243,9 @@ const NIVELES = {
   // y siempre sigue el orden de la canción; solo vuelve atrás al terminar el tema.
   grupo:  {nombre:"Coro / aula", paso1:.36, paso2:.72, minInicio:1, unaPalabra:5, retomarPalabras:4, retomar:.8, laxo:true, anclas:true, enOrden:true}
 };
-let nivel = NIVELES.normal;
+// Un solo modo para todo (escenario, salón, aula): se guía por dos palabras seguidas de la letra.
+NIVELES.unico = {nombre:"Único", paso1:.45, paso2:.8, minInicio:1, unaPalabra:6, retomarPalabras:3, retomar:.8, laxo:true, anclas:true, enOrden:true};
+let nivel = NIVELES.unico;
 const _simCache = new Map();
 // Cómo suena la palabra en castellano rioplatense: b/v, s/z/c, y/ll, h muda, etc.
 // Así "vos" y "bos", "caza" y "casa", "llorar" y "yorar" se toman como la misma palabra.
@@ -888,7 +890,7 @@ function preparar(s){
     const idxs = e.map((x,i)=>x.tipo==="verso"?i:-1).filter(i=>i>=0);
     idxs.forEach((li,k)=>{
       const w = norm(e[li].texto); let clave = w.filter(x=>x.length>=3); if (clave.length<2) clave=w;
-      versos.push({s:si, li, k, total:idxs.length, ultimo:k===idxs.length-1, clave, txt:e[li].texto.trim()});
+      versos.push({s:si, li, k, total:idxs.length, ultimo:k===idxs.length-1, clave, pal:w, txt:e[li].texto.trim()});
     });
   });
 }
@@ -1047,16 +1049,16 @@ const Local = {
     await new Promise((ok, mal)=>{ const sc = document.createElement("script");
       sc.src = URL.createObjectURL(new Blob([txt], {type:"text/javascript"})); sc.onload = ok; sc.onerror = mal; document.head.appendChild(sc); });
   },
-  cargar(){
+  cargar(silencioso){
     if (this.modelo) return Promise.resolve(this.modelo);
     if (!this.cargando){
       const primera = !ls.get("atril.voskListo", false);
-      avisoLocal(primera ? "Bajando el reconocedor del teléfono (unos 34 MB, solo esta vez). Puede tardar unos minutos…" : "Preparando el reconocedor del teléfono…");
+      if (!silencioso) avisoLocal(primera ? "Bajando el reconocedor del teléfono (unos 34 MB, solo esta vez). Puede tardar unos minutos…" : "Preparando el reconocedor del teléfono…");
       this.cargando = (async()=>{
         await this.libreria();
         const m = await Vosk.createModel(this.MODELO, -1);
-        this.modelo = m; ls.set("atril.voskListo", true); avisoLocal(""); return m;
-      })().catch(e=>{ this.cargando = null; avisoLocal(""); throw e; });
+        this.modelo = m; ls.set("atril.voskListo", true); if (!silencioso) avisoLocal(""); return m;
+      })().catch(e=>{ this.cargando = null; if (!silencioso) avisoLocal(""); throw e; });
     }
     return this.cargando;
   },
@@ -1193,6 +1195,32 @@ const Oido = {
     }
     return 0;
   },
+  // Dos palabras seguidas (en orden) de un verso que viene: es la señal más segura de por dónde va.
+  // Busca en los 6 versos siguientes y se queda con el más cercano. Si esas dos palabras
+  // también están en el verso que se está cantando, no cuenta (es una frase que se repite).
+  parDe(pal, cola){
+    for (let i=0;i+1<pal.length;i++){
+      const a=pal[i], b=pal[i+1];
+      if (a.length+b.length < 6 || (a.length < 3 && b.length < 3)) continue;
+      for (let j=0;j+1<cola.length;j++) if (sim(a,cola[j])>=.8 && sim(b,cola[j+1])>=.8) return a+" "+b;
+    }
+    return "";
+  },
+  porPares(cola){
+    cola = cola.slice(-8); if (cola.length < 2) return -1;
+    const cur = actual >= 0 ? versos[actual] : null;
+    const alFinal = actual >= versos.length - 2;
+    const candidatos = [];
+    for (let d=1; d<=6; d++){ const g = actual + d; if (g < versos.length) candidatos.push(g); }
+    // Terminando la canción, también puede volver al comienzo o al estribillo.
+    if (alFinal) for (let g=Math.min(versos.length, actual)-1; g>=0; g--) candidatos.push(g);
+    for (const g of candidatos){
+      const par = this.parDe(versos[g].pal, cola); if (!par) continue;
+      if (cur){ const [a,b] = par.split(" "); if (this.parDe(cur.pal, [a,b])) continue; }
+      return g;
+    }
+    return -1;
+  },
   // Con mucho ruido o muchas voces: se agarra de una palabra clave o de dos seguidas
   // de los versos que vienen (nunca de más abajo), y avanza al más cercano.
   porAnclas(cola){
@@ -1257,6 +1285,7 @@ const Oido = {
         if (p >= umbral){ mejor = g; mp = p; break; }
       }
     }
+    if (mejor < 0) mejor = this.porPares(cola);
     if (mejor < 0 && nivel.anclas) mejor = this.porAnclas(cola);
     // Retomar: si ya se escucharon varias palabras que no son el verso que sigue
     // (habló, cantó otro, cambió la letra, terminó y volvió al estribillo), busca dónde se retomó.
@@ -1277,9 +1306,10 @@ const Oido = {
         let elegido = -1, mejorVal = -1;
         for (let g = 0; g < versos.length; g++){
           if (g === actual || g === actual+1 || g === actual+2) continue;
-          if (nivel.enOrden && g < actual && !alFinal) continue;
           const v = versos[g]; if (v.clave.length < 3) continue;
           const completo = this.puntaje(v, tail.slice(-(v.clave.length+3)));
+          // Para volver atrás (un estribillo escrito una sola vez) hace falta el verso entero, muy claro.
+          if (nivel.enOrden && g < actual && !alFinal && (completo < .9 || v.clave.length < 4)) continue;
           let comienzo = 0;
           if (v.clave.length >= 4 && n >= 3){
             const m = Math.min(4, n);
@@ -1303,7 +1333,7 @@ const Oido = {
 };
 const Ajustes = { motor: ls.get("atril.motor", "google"), pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
 function aplicarNivel(){
-  nivel = NIVELES[Ajustes.nivel] || NIVELES.normal;
+  nivel = NIVELES.unico; $("#btnNivel").style.display = "none"; return;
   const b = $("#btnNivel"); b.textContent = "Oído: " + nivel.nombre;
   b.classList.toggle("banda", Ajustes.nivel==="banda"); b.classList.toggle("ruido", Ajustes.nivel==="ruido" || Ajustes.nivel==="grupo");
 }
@@ -1325,7 +1355,7 @@ const Mic = {
   // Filtro de voz: el micrófono pasa por un filtro que deja la banda de la voz cantada
   // (corta graves de guitarra y bombo, y agudos de platillos) y empareja el volumen.
   pista:null, ac:null, flujo:null, an:null, buf:null,
-  pistaFalla: ls.get("atril.sinFiltro", false),
+  pistaFalla: true,   // sin filtro: Google limpia el sonido mejor solo
   conSonido:0,    // milisegundos seguidos con sonido fuerte sin que llegue texto
   inicioPista:0, textosConPista:0,
   local:false, sinFrases:false, trabasLocal:0, errRed:[], ultReinicio:0, fallos:0, anduvo:false, caido:0,
@@ -1432,7 +1462,29 @@ const Mic = {
     }
     try{ r.start(); return true; }catch(e){ return false; }
   },
-  usaLocal(){ return Ajustes.motor === "vosk" && !this.localFalla; },
+  // Google siempre; si se corta la señal (o el teléfono no tiene el de Google), el del teléfono.
+  modoLocal:false,
+  usaLocal(){ return this.modoLocal && !this.localFalla; },
+  pasarALocal(){
+    if (this.modoLocal || this.localFalla) return;
+    this.modoLocal = true;
+    avisoLocal("Sin señal: sigo escuchando con el reconocedor del teléfono.");
+    setTimeout(()=>{ if ($("#avisoLocal").textContent.startsWith("Sin señal")) avisoLocal(""); }, 5000);
+    if (this.quiere) this.reiniciar();
+  },
+  volverAGoogle(){
+    if (!this.modoLocal || !this.usarNativo()) return;
+    this.modoLocal = false; this.errRed = [];
+    Local.soltar(true);
+    if (this.quiere){ this.vivo = false; this.rec = null; this.encender(true); }
+  },
+  // Deja bajado el reconocedor del teléfono (una sola vez, con wifi) para cuando falte la señal.
+  bajarDeAntemano(){
+    if (this._bajando || ls.get("atril.voskListo", false) || !navigator.onLine) return;
+    const c = navigator.connection; if (c && (c.saveData || c.type === "cellular")) return;
+    this._bajando = true;
+    setTimeout(()=>{ Local.cargar(true).then(m=>{ if (!this.usaLocal()){ try{ m.terminate(); }catch(e){} Local.modelo = null; Local.cargando = null; } }).catch(()=>{}); }, 20000);
+  },
   async encenderLocal(){
     if (this._armandoL || this.vivo) return; this._armandoL = true;
     try{
@@ -1446,10 +1498,11 @@ const Mic = {
       const n = e && e.name;
       if (n === "NotAllowedError" || n === "SecurityError"){ this.quiere = false; clearInterval(this.guardia); this.ui(); sinMic(); return; }
       // No se pudo (sin internet la primera vez, teléfono sin memoria…): sigue con el de Google.
-      this.localFalla = true;
+      this.localFalla = true; this.modoLocal = false;
       avisoLocal("No pude preparar el reconocedor del teléfono" + (navigator.onLine ? "" : " (hace falta internet la primera vez)") + ". Sigo con el de Google.");
       setTimeout(()=>avisoLocal(""), 7000);
-      if (this.quiere) this.encender();
+      if (this.quiere && this.usarNativo()) this.encender();
+      else if (this.quiere){ this.quiere = false; clearInterval(this.guardia); this.ui(); sinMic(); }
     }finally{ this._armandoL = false; }
   },
   encender(desdeGuardia){
@@ -1466,7 +1519,7 @@ const Mic = {
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=5;
         if (this.local) { try{ r.processLocally = true; }catch(e){} this.ponerFrases(r); }
         r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
-        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.trabasLocal = 0; if (this.local) this.textoLocal = true; if (this.pista) this.textosConPista++; this.conSonido = 0;
+        r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.trabasLocal = 0; if (this.local) this.textoLocal = true; this.bajarDeAntemano(); if (this.pista) this.textosConPista++; this.conSonido = 0;
           let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i], alts=[]; for (let j=0;j<res.length;j++) alts.push(res[j].transcript); const t=Oido.elegir(alts); if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
           // Una vez que anduvo, un "sin permiso" suelto es un corte del teléfono: se reintenta.
@@ -1479,7 +1532,7 @@ const Mic = {
             this.dejarFiltro(true); setTimeout(()=>this.reiniciar(), 100); return;
           }
           // Cortes de internet repetidos: si el teléfono reconoce sin internet, se pasa a eso.
-          if (ev.error === "network"){ const ahora = Date.now(); this.errRed = this.errRed.filter(t=>ahora-t<60000); this.errRed.push(ahora); if (this.errRed.length >= 2) this.probarLocal(); }
+          if (ev.error === "network"){ const ahora = Date.now(); this.errRed = this.errRed.filter(t=>ahora-t<60000); this.errRed.push(ahora); if (this.errRed.length >= 2) this.pasarALocal(); }
           if (this.local && ev.error === "language-not-supported"){ this.local = false; setTimeout(()=>this.reiniciar(), 100); }
           // Este reconocedor no acepta la letra como guía: sigue sin ella.
           if (ev.error === "phrases-not-supported"){ this.sinFrases = true; setTimeout(()=>this.reiniciar(), 100); return; }
@@ -1516,6 +1569,7 @@ const Mic = {
       });
       return;
     }
+    if (!this.localFalla){ this.modoLocal = true; this.encenderLocal(); return; }
     this.quiere = false; this.ui(); sinMic();
   },
   // Le pasa al reconocedor los versos de la canción para que espere esas palabras.
@@ -1586,6 +1640,7 @@ const Mic = {
   }
 };
 document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible") Mic.revivir(); });
+window.addEventListener("online", ()=>setTimeout(()=>{ if (navigator.onLine) Mic.volverAGoogle(); }, 5000));
 $("#escena").addEventListener("pointerdown", e=>{ if (Local.ac && Local.ac.state === "suspended"){ try{ Local.ac.resume(); }catch(err){} } if (!e.target.closest("#btnMic")) Mic.revivir(); });
 $("#btnMic").onclick = ()=>{ if (Mic.on) Mic.parar(); else Mic.arrancar(); };
 $("#retomar").onclick = ()=>Mic.arrancar();
@@ -1607,12 +1662,6 @@ function abrirAjustes(){
       <select id="ajIdioma">
         ${[["es-AR","Castellano (Argentina)"],["es-ES","Castellano (España)"],["es-MX","Castellano (México)"],["pt-BR","Portugués (Brasil)"],["qu","Quechua (si el teléfono lo admite)"]].map(([v,t])=>`<option value="${v}" ${v===Ajustes.idioma?"selected":""}>${t}</option>`).join("")}
       </select></label>
-    <label class="ch" style="flex-wrap:wrap">Reconocimiento de voz:
-      <select id="ajMotor">
-        <option value="google" ${Ajustes.motor!=="vosk"?"selected":""}>Google (necesita internet)</option>
-        <option value="vosk" ${Ajustes.motor==="vosk"?"selected":""}>En el teléfono (sin internet, solo castellano)</option>
-      </select></label>
-    <p class="ayuda" style="margin:-4px 0 4px">«En el teléfono» se baja una sola vez (unos 34 MB) y después anda sin señal, sin cortes y escuchando solo las palabras de la canción.</p>
     <div class="fila"><button data-r="comp">Compartir esta canción</button><button data-r="ok" class="pri">Listo</button></div>
     <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
   modal(html(), async r=>{
@@ -1625,8 +1674,6 @@ function abrirAjustes(){
     Ajustes.idioma = $("#ajIdioma").value;
     ls.set("atril.idioma", Ajustes.idioma);
     if (Mic.rec) Mic.rec.lang = Ajustes.idioma;
-    const motor = $("#ajMotor").value;
-    if (motor !== Ajustes.motor){ Ajustes.motor = motor; ls.set("atril.motor", motor); Mic.cambiarMotor(); }
   });
 }
 
