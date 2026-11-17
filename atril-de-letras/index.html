@@ -176,7 +176,8 @@
         <a class="btn" id="lnkCifra" target="_blank" rel="noopener">Buscar en Cifra Club</a>
         <a class="btn" id="lnkLetra" target="_blank" rel="noopener">Buscar solo la letra</a>
       </div>
-      <p class="ayuda">Se abre la búsqueda en otra pestaña. Copiá la cifra completa (con los acordes) y pegala acá abajo: la app reconoce sola qué renglones son acordes, cuáles son letra y cuáles son títulos como [Intro] o [Estribillo].</p>
+      <p class="ayuda">Se abre la búsqueda en otra pestaña. Cuando encuentres la canción en Cifra Club, copiá su enlace (Compartir → Copiar enlace), pegalo acá y tocá «Abrir para copiar». Se abre una versión limpia de la cifra: copiala entera y pegala abajo. No copies desde la página común de Cifra Club en el teléfono: corta los renglones y se pierden partes de la letra.</p>
+      <div class="fila"><input id="inCifraUrl" placeholder="Enlace de Cifra Club" inputmode="url" autocomplete="off"><a class="btn pri" id="lnkCopiar" target="_blank" rel="noopener" style="display:none">Abrir para copiar</a></div>
     </div>
     <button id="btnPegar" style="display:none">Pegar lo que copié</button>
     <button id="btnArchivo">Cargar desde un archivo (Word, PDF o texto)</button>
@@ -690,6 +691,29 @@ function actualizarBusqueda(){
   $("#lnkCifra").href = "https://www.google.com/search?q=" + encodeURIComponent("site:cifraclub.com " + q);
   $("#lnkLetra").href = "https://www.google.com/search?q=" + encodeURIComponent(q + " letra");
 }
+// Del enlace de una canción de Cifra Club arma el de su versión para imprimir: el texto sale entero,
+// sin caracteres invisibles y sin los cortes que la página común hace en pantallas angostas.
+function enlaceImprimir(u){
+  const m = String(u||"").match(/https?:\/\/(?:www\.|m\.)?(cifraclub\.com(?:\.br)?)\/([^\s?#]+)/i);
+  if (!m) return "";
+  let ruta = m[2].replace(/imprimir\.html$/i, "").replace(/\/?$/, "/");
+  if (ruta.split("/").filter(Boolean).length < 2) return "";
+  return "https://www." + m[1].toLowerCase() + "/" + ruta + "imprimir.html";
+}
+function revisarEnlace(){
+  const l = enlaceImprimir($("#inCifraUrl").value);
+  $("#lnkCopiar").style.display = l ? "" : "none";
+  if (l) $("#lnkCopiar").href = l;
+}
+$("#inCifraUrl").addEventListener("input", revisarEnlace);
+// Si pega el enlace en el recuadro de la letra, lo pasa al lugar del enlace.
+$("#inLetra").addEventListener("input", ()=>{
+  const t = $("#inLetra").value.trim();
+  if (/^\S+$/.test(t) && enlaceImprimir(t)){
+    $("#inLetra").value = ""; $("#inCifraUrl").value = t; revisarEnlace();
+    const a = $("#avisoArchivo"); a.style.display = ""; a.textContent = "Ese es el enlace de la canción: tocá «Abrir para copiar» (arriba), copiá la cifra entera y pegala acá.";
+  }
+});
 $("#inTitulo").addEventListener("input", actualizarBusqueda);
 $("#inArtista").addEventListener("input", actualizarBusqueda);
 function abrirEditor(s){
@@ -700,6 +724,7 @@ function abrirEditor(s){
   $("#inLetra").value = s ? s.letra : "";
   $("#edBorrar").style.display = s ? "" : "none";
   $("#avisoArchivo").style.display = "none";
+  $("#inCifraUrl").value = ""; revisarEnlace();
   actualizarBusqueda(); mostrar("editor");
   Docs.preparar();
 }
