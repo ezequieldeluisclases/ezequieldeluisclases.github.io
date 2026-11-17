@@ -182,6 +182,8 @@
     <button id="btnPegar" style="display:none">Pegar lo que copié</button>
     <button id="btnArchivo">Cargar desde un archivo (Word, PDF o texto)</button>
     <button id="btnDocs">Traer de Google Docs</button>
+    <button id="btnFoto">Cargar desde una foto o captura</button>
+    <input type="file" id="inFoto" accept="image/*" multiple style="display:none">
     <input type="file" id="inArchivo" accept=".docx,.pdf,.txt,.odt,.text,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.google-apps.document" style="display:none">
     <p class="ayuda" id="avisoArchivo" style="display:none"></p>
     <textarea id="inLetra" placeholder="Pegá acá la letra o la cifra.&#10;&#10;Dejá una línea en blanco entre estrofa y estrofa."></textarea>
@@ -1093,6 +1095,111 @@ const Docs = {
   }
 };
 $("#btnDocs").onclick = ()=>Docs.abrir();
+
+/* ---------- leer una foto o captura de pantalla (OCR) ---------- */
+// Usa Tesseract (corre en el teléfono). La primera vez baja el lector y el castellano (unos 5 MB);
+// después queda guardado. Con la posición de cada palabra en la foto rearma las columnas,
+// así los acordes quedan arriba de la sílaba que va.
+const Foto = {
+  V: "5.1.1", base: "https://cdn.jsdelivr.net/npm/", trabajador: null,
+  aviso(t){ const a = $("#avisoArchivo"); a.style.display = ""; a.textContent = t; },
+  async lector(){
+    if (this.trabajador) return this.trabajador;
+    if (!window.Tesseract) await Docs.script(this.base + "tesseract.js@" + this.V + "/dist/tesseract.min.js");
+    this.trabajador = await Tesseract.createWorker("spa", 1, {
+      workerPath: this.base + "tesseract.js@" + this.V + "/dist/worker.min.js",
+      corePath: this.base + "tesseract.js-core@" + this.V,
+      langPath: this.base + "@tesseract.js-data/spa/4.0.0_best_int",
+      logger: m=>{ if (m && m.status && typeof m.progress === "number") this.aviso((/recogniz/.test(m.status) ? "Leyendo la foto… " : "Preparando el lector (solo la primera vez)… ") + Math.round(m.progress*100) + "%"); }
+    });
+    await this.trabajador.setParameters({preserve_interword_spaces: "1", tessedit_pageseg_mode: "6"});
+    return this.trabajador;
+  },
+  // Gris, agrandada si es chica y en negro sobre blanco (las capturas en modo oscuro se invierten).
+  async preparar(file){
+    const img = await createImageBitmap(file);
+    const esc = Math.min(3, Math.max(1, 1600 / img.width));
+    const c = document.createElement("canvas"); c.width = Math.round(img.width*esc); c.height = Math.round(img.height*esc);
+    const x = c.getContext("2d"); x.imageSmoothingQuality = "high"; x.drawImage(img, 0, 0, c.width, c.height);
+    const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+    let suma = 0; for (let i=0;i<p.length;i+=4){ const g = .299*p[i] + .587*p[i+1] + .114*p[i+2]; p[i]=p[i+1]=p[i+2]=g; suma += g; }
+    if (suma / (p.length/4) < 128) for (let i=0;i<p.length;i+=4){ p[i]=p[i+1]=p[i+2]=255-p[i]; }
+    x.putImageData(d, 0, 0);
+    return c;
+  },
+  renglones(data){
+    let ls = [];
+    for (const b of (data.blocks||[])) for (const par of (b.paragraphs||[])) for (const l of (par.lines||[])) ls.push(l);
+    if (!ls.length) ls = data.lines || [];
+    return ls.map(l=>({y0:l.bbox.y0, y1:l.bbox.y1, conf:l.confidence,
+      pal:(l.words||[]).filter(w=>w.text && w.text.trim()).map(w=>({t:w.text.trim(), x0:w.bbox.x0, x1:w.bbox.x1, conf:w.confidence}))}))
+      .filter(l=>l.pal.length);
+  },
+  // Rearma el texto. La letra va con un espacio entre palabras; cada acorde se ubica sobre la letra
+  // que tiene justo abajo en la foto (así sirve también con letra que no es de ancho fijo).
+  armar(ls){
+    // Fuera la barra del teléfono (hora, batería) si quedó arriba.
+    while (ls.length && /^\d{1,2}[:.]\d{2}\b/.test(ls[0].pal[0].t)) ls = ls.slice(1);
+    if (!ls.length) return "";
+    const anchos = [];
+    for (const l of ls) for (const w of l.pal) if (w.t.length >= 3) anchos.push((w.x1 - w.x0) / w.t.length);
+    anchos.sort((a,b)=>a-b);
+    const ch = anchos.length ? anchos[Math.floor(anchos.length/2)] : 10;
+    const izq = Math.min(...ls.map(l=>l.pal[0].x0));
+    for (const l of ls){
+      for (const w of l.pal) if (/^[A-G]\/\d$/.test(w.t)) w.t = w.t.replace("/", "");
+      l.texto = l.pal.map(w=>w.t).join(" ");
+      l.acordes = esLineaAcordes(l.texto);
+      // Dónde cae cada letra del renglón (repartidas a lo ancho de su palabra).
+      l.xs = []; l.pal.forEach((w, k)=>{ if (k) l.xs.push(w.x0 - ch/2); for (let i=0;i<w.t.length;i++) l.xs.push(w.x0 + (w.x1 - w.x0) * (i + .5) / w.t.length); });
+    }
+    const pasos = []; for (let i=1;i<ls.length;i++) pasos.push(ls[i].y0 - ls[i-1].y0);
+    const ord = pasos.slice().sort((a,b)=>a-b), paso = ord.length ? ord[Math.floor(ord.length*.4)] : 0;
+    const out = [];
+    ls.forEach((l, i)=>{
+      if (i && paso && ls[i].y0 - ls[i-1].y0 > paso * 1.45) out.push("");
+      if (!l.acordes){ out.push(l.texto); return; }
+      const abajo = ls[i+1] && !ls[i+1].acordes && ls[i+1].y0 - l.y0 <= paso * 1.45 ? ls[i+1] : null;
+      let s = "";
+      for (const w of l.pal){
+        let col;
+        if (abajo){
+          col = 0; let mejor = Infinity;
+          abajo.xs.forEach((x, k)=>{ const d = Math.abs(x - (w.x0 + ch/2)); if (d < mejor){ mejor = d; col = k; } });
+          if (w.x0 > abajo.pal[abajo.pal.length-1].x1) col = abajo.texto.length + Math.round((w.x0 - abajo.pal[abajo.pal.length-1].x1) / ch);
+        } else col = Math.max(0, Math.round((w.x0 - izq) / ch));
+        if (s.length && s.length >= col) s += " "; else s = s.padEnd(col, " ");
+        s += w.t;
+      }
+      out.push(s);
+    });
+    return out.join("\n");
+  },
+  async leer(files){
+    const textos = [];
+    try{
+      this.aviso("Preparando el lector…");
+      const t = await this.lector();
+      for (let k=0;k<files.length;k++){
+        this.aviso("Leyendo la foto" + (files.length>1 ? " " + (k+1) + " de " + files.length : "") + "…");
+        const c = await this.preparar(files[k]);
+        const r = await t.recognize(c, {}, {text:true, blocks:true});
+        // Fuera lo que casi seguro es basura (barra del teléfono, botones, renglones ilegibles).
+        const ls = this.renglones(r.data).filter(l=>l.conf >= 45);
+        textos.push(this.armar(ls));
+      }
+    }catch(e){
+      this.aviso(navigator.onLine ? "No pude leer la foto (" + ((e && e.message) || e) + ")." : "La primera vez hace falta internet para bajar el lector de fotos.");
+      return;
+    }
+    const todo = textos.filter(Boolean).join("\n\n");
+    if (!todo.trim()){ this.aviso("No encontré texto en la foto. Probá con una captura más nítida o más de cerca."); return; }
+    await cargarArchivo(new File([todo], ".txt", {type:"text/plain"}));
+    this.aviso($("#avisoArchivo").textContent + " Viene de una foto: revisá letra y acordes antes de guardar.");
+  }
+};
+$("#btnFoto").onclick = ()=>$("#inFoto").click();
+$("#inFoto").onchange = async e=>{ const fs = [...e.target.files]; e.target.value = ""; if (fs.length) await Foto.leer(fs); };
 if (window.claude && claude.use) $("#btnDocs").style.display = "none";
 $("#inArchivo").onchange = async e=>{
   const f = e.target.files[0]; if (!f) return;

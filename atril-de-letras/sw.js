@@ -1,4 +1,4 @@
-const CACHE = "atril-v30";
+const CACHE = "atril-v31";
 const ARCHIVOS = ["./", "index.html", "manifest.webmanifest", "icono-192.png", "icono-512.png", "icono-maskable-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ARCHIVOS))); self.skipWaiting(); });
 self.addEventListener("activate", e => {
@@ -27,6 +27,10 @@ self.addEventListener("fetch", e => {
     return;
   }
   // Código de Google para la cuenta: se guarda la primera vez y después abre aunque no haya señal.
+  if (e.request.method === "GET" && url.host === "cdn.jsdelivr.net" && /^\/npm\/(tesseract\.js|@tesseract\.js-data)/.test(url.pathname)){
+    e.respondWith(caches.open("atril-firebase").then(c => c.match(e.request).then(r => r || fetch(e.request).then(res => { if (res.ok) c.put(e.request, res.clone()); return res; }))));
+    return;
+  }
   if (e.request.method === "GET" && url.host === "www.gstatic.com" && url.pathname.startsWith("/firebasejs/")){
     e.respondWith(caches.open("atril-firebase").then(c => c.match(e.request).then(r => r || fetch(e.request).then(res => { if (res.ok) c.put(e.request, res.clone()); return res; }))));
     return;
