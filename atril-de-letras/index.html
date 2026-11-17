@@ -65,6 +65,8 @@
   #btnMic{min-width:112px}
   #btnMic.escuchando{background:#163020;border-color:var(--ok);color:var(--ok)}
   #btnMic.escuchando::before{content:"";display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:7px;animation:lat 1.2s infinite}
+  #btnMic.escuchando.pausa{background:#2c2410;border-color:var(--acc);color:var(--acc)}
+  #btnMic.escuchando.pausa::before{background:var(--acc)}
   @keyframes lat{50%{opacity:.25}}
   #estrofaInfo{color:var(--dim);font-size:13px;padding:8px 18px 0;letter-spacing:.5px;text-transform:uppercase;display:flex;justify-content:space-between;gap:10px}
   #estrofaInfo .izq{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -1476,6 +1478,7 @@ const Local = {
     this.proc.onaudioprocess = e=>{
       const d = e.inputBuffer.getChannelData(0); let m = 0; for (let i=0;i<d.length;i+=16){ const v = Math.abs(d[i]); if (v > m) m = v; }
       if (m > .003) this.conSonido = true;
+      if (m > .06) this.ultFuerte = Date.now();
       if (this.rec){ try{ this.rec.acceptWaveform(e.inputBuffer); }catch(err){} } };
     fuente.connect(g1); g1.connect(a1); a1.connect(comp); comp.connect(this.proc); this.proc.connect(ac.destination);
     this.fuente = fuente;
@@ -1726,7 +1729,7 @@ const Oido = {
 };
 // Segundo oído (reconocedor del teléfono) con su propio registro: así sus palabras no se mezclan con las de Google.
 window.OidoB = Object.create(Oido); OidoB.oidas=[]; OidoB.parcial=[]; OidoB.corte=0; OidoB.ultFinal=[]; OidoB.ultMov=Date.now();
-const Ajustes = { doble: ls.get("atril.doble", false), motor: ls.get("atril.motor", "google"), pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
+const Ajustes = { doble: ls.get("atril.doble", true), motor: ls.get("atril.motor", "google"), pasarSolo: ls.get("atril.pasarSolo", true), idioma: ls.get("atril.idioma", "es-AR"), nivel: ls.get("atril.nivel", "normal") };
 function aplicarNivel(){
   nivel = NIVELES.unico; $("#btnNivel").style.display = "none"; return;
   const b = $("#btnNivel"); b.textContent = "Oído: " + nivel.nombre;
@@ -1741,6 +1744,17 @@ $("#btnNivel").onclick = e=>{
 aplicarNivel();
 
 /* ---------- micrófono ---------- */
+// Registro de lo que pasa con el micrófono (cortes, reinicios, errores), para poder revisarlo después.
+const RegMic = {
+  l: ls.get("atril.regMic", []),
+  anotar(t){
+    const d = new Date(), hh = n=>String(n).padStart(2,"0");
+    this.l.push(hh(d.getHours()) + ":" + hh(d.getMinutes()) + ":" + hh(d.getSeconds()) + " " + t);
+    if (this.l.length > 120) this.l = this.l.slice(-100);
+    clearTimeout(this._g); this._g = setTimeout(()=>ls.set("atril.regMic", this.l), 2000);
+  },
+  texto(){ return "Atril de letras — informe del micrófono\n" + navigator.userAgent + "\n\n" + this.l.join("\n"); }
+};
 const Mic = {
   quiere:false,   // el usuario tocó "Escuchar" y no lo apagó
   vivo:false,     // el reconocimiento está andando en este momento
@@ -1759,6 +1773,8 @@ const Mic = {
   usarNativo(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; return SR && (!this.enMarco || !this.dict) ? SR : null; },
   ui(){
     const b=$("#btnMic"); b.classList.toggle("escuchando", this.quiere); b.textContent = this.quiere ? "Escucha" : "Escuchar";
+    // Ámbar: está retomando (el reconocedor se cortó y se está volviendo a prender).
+    b.classList.toggle("pausa", this.quiere && !this.vivo && !this.segundo);
     if (!this.quiere || this.vivo) $("#retomar").classList.remove("on");
   },
   arrancar(){
@@ -1796,6 +1812,9 @@ const Mic = {
         return;
       }
       const quieto = Date.now() - this.ultimo;
+      // Con doble oído se sabe si entra sonido fuerte: si hay sonido y Google no manda nada, se trabó.
+      if (this.rec && this.segundo && Date.now() - (Local.ultFuerte||0) < 2500 && quieto > 4500 && Date.now() - this.ultReinicio > 6000){
+        this.reiniciar("Google callado con sonido"); return; }
       // No se reinicia seguido: cada reinicio deja un hueco en el que no escucha.
       const reciente = Date.now() - this.ultReinicio < 10000;
       // Hay sonido pero no llega texto hace rato (y no es un solo de guitarra corto): se trabó.
@@ -1864,7 +1883,11 @@ const Mic = {
   },
   // Google siempre; si se corta la señal (o el teléfono no tiene el de Google), el del teléfono.
   modoLocal:false, segundo:false, textosG:0,
-  dobleActivo(){ return Ajustes.doble && !this.usaLocal() && !this.dobleFalla; },
+  // Prendido de fábrica. Si el reconocedor del teléfono todavía no se bajó (unos 40 MB), espera a tener wifi.
+  dobleActivo(){
+    const c = navigator.connection, celular = c && (c.type === "cellular" || c.saveData);
+    return Ajustes.doble && !this.usaLocal() && !this.dobleFalla && (ls.get("atril.voskListo", false) || !celular);
+  },
   // Prende el reconocedor del teléfono al lado del de Google y, a los 12 segundos, revisa que anden los dos.
   async arrancarSegundo(){
     if (this._armando2 || this.segundo || !this.dobleActivo()) return;
@@ -1873,7 +1896,7 @@ const Mic = {
       await Local.cargar();
       if (!this.quiere || !this.dobleActivo()) return;
       Local.soltar(); OidoB.reiniciar(); await Local.escuchar();
-      this.segundo = true; Local.textos = 0; this.textosG = 0;
+      this.segundo = true; Local.textos = 0; this.textosG = 0; this._revisiones = 0; RegMic.anotar("teléfono escucha (doble oído)");
       avisoLocal("Doble oído: escuchando con Google y con el teléfono.");
       clearTimeout(this._revisar2);
       this._revisar2 = setTimeout(()=>this.revisarDoble(), 12000);
@@ -1887,7 +1910,11 @@ const Mic = {
     if (!this.quiere || !this.segundo) return;
     const g = this.textosG, t = Local.textos, sonido = Local.conSonido;
     if (!sonido){ this.cortarSegundo("el segundo micrófono no recibe sonido en este teléfono"); return; }
-    if (g === 0 && t > 0){
+    if (g === 0 && t > 0 && this.vivo){
+      // Google está prendido pero todavía no entendió nada (quizás no empezó a cantar): se revisa de nuevo.
+      if ((this._revisiones = (this._revisiones||0) + 1) <= 3){ this._revisar2 = setTimeout(()=>this.revisarDoble(), 12000); return; }
+    }
+    if (g === 0 && t > 2 && (!this.vivo || this._revisiones > 3)){
       // El teléfono le sacó el micrófono a Google: se queda con el del teléfono, que sí anda.
       this.cortarSegundo(""); this.modoLocal = true; avisoLocal("Doble oído: Google dejó de escuchar con los dos prendidos. Sigo con el del teléfono."); this.reiniciar(); return;
     }
@@ -1895,6 +1922,7 @@ const Mic = {
     setTimeout(()=>{ if ($("#avisoLocal").textContent.startsWith("Doble oído")) avisoLocal(""); }, 6000);
   },
   cortarSegundo(motivo){
+    RegMic.anotar("se apagó el segundo oído" + (motivo ? ": " + motivo : ""));
     clearTimeout(this._revisar2);
     if (this.segundo || Local.flujo) Local.soltar(true);
     this.segundo = false; this.dobleFalla = true;
@@ -1955,10 +1983,11 @@ const Mic = {
       if (!this.rec){
         const r = new SR(); r.lang=Ajustes.idioma; r.continuous=true; r.interimResults=true; r.maxAlternatives=5;
         if (this.local) { try{ r.processLocally = true; }catch(e){} this.ponerFrases(r); }
-        r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); };
+        r.onstart = ()=>{ this.vivo = true; this.caido = 0; this.ultimo = Date.now(); this.anduvo = true; this.ui(); RegMic.anotar("Google escucha"); };
         r.onresult = ev=>{ this.ultimo = Date.now(); this.fallos = 0; this.textosG++; this.trabasLocal = 0; if (this.local) this.textoLocal = true; this.bajarDeAntemano(); if (this.pista) this.textosConPista++; this.conSonido = 0;
           let parc=""; for (let i=ev.resultIndex;i<ev.results.length;i++){ const res=ev.results[i], alts=[]; for (let j=0;j<res.length;j++) alts.push(res[j].transcript); const t=Oido.elegir(alts); if (ev.results[i].isFinal) Oido.final(t); else parc+=t+" "; } Oido.parcialTxt(parc); };
         r.onerror = ev=>{
+          RegMic.anotar("error de Google: " + ev.error);
           // Una vez que anduvo, un "sin permiso" suelto es un corte del teléfono: se reintenta.
           if (ev.error==="audio-capture" && this.segundo){ this.cortarSegundo("Google no puede escuchar con los dos prendidos en este teléfono"); setTimeout(()=>this.reiniciar(), 300); return; }
           if ((ev.error==="not-allowed" || ev.error==="service-not-allowed" || ev.error==="audio-capture") && !this.pista && this.anduvo && this.fallos < 20){
@@ -1976,7 +2005,7 @@ const Mic = {
           if (ev.error === "phrases-not-supported"){ this.sinFrases = true; setTimeout(()=>this.reiniciar(), 100); return; }
           // "no-speech", "aborted": se vuelve a prender solo en onend
         };
-        r.onend = ()=>{ if (this.rec !== r) return; this.vivo = false; Oido.nuevaSesion();
+        r.onend = ()=>{ if (this.rec !== r) return; this.vivo = false; Oido.nuevaSesion(); this.ui(); RegMic.anotar("Google se cortó");
           // Se vuelve a prender enseguida; si el teléfono no lo deja, se arma uno nuevo.
           if (this.quiere) setTimeout(()=>{ if (this.quiere && !this.vivo && this.rec === r && !this.iniciar(r)) setTimeout(()=>this.reiniciar(), 250); }, 30); };
         this.rec = r; this.arranques++;
@@ -2059,7 +2088,8 @@ const Mic = {
     try{ if (SR && SR.available && await SR.available({langs:[Ajustes.idioma], processLocally:true}) === "available"){ this.local = true; this.reiniciar(); } }catch(e){}
   },
   // Tira el reconocedor trabado y arma uno nuevo.
-  reiniciar(){
+  reiniciar(motivo){
+    RegMic.anotar("reinicio" + (motivo ? " (" + motivo + ")" : ""));
     if (this.usaLocal()){ Local.soltar(); this.vivo = false; this.ultReinicio = Date.now(); Oido.nuevaSesion(); if (this.quiere) this.encender(true); return; }
     const viejo = this.rec; this.rec = null; this.vivo = false; this.ultimo = Date.now(); this.ultReinicio = Date.now();
     Oido.nuevaSesion();
@@ -2100,12 +2130,20 @@ function abrirAjustes(){
       <select id="ajIdioma">
         ${[["es-AR","Castellano (Argentina)"],["es-ES","Castellano (España)"],["es-MX","Castellano (México)"],["pt-BR","Portugués (Brasil)"],["qu","Quechua (si el teléfono lo admite)"]].map(([v,t])=>`<option value="${v}" ${v===Ajustes.idioma?"selected":""}>${t}</option>`).join("")}
       </select></label>
-    <label class="ch"><input type="checkbox" id="ajDoble" ${Ajustes.doble?"checked":""}> Doble oído (prueba): Google y el teléfono a la vez</label>
+    <label class="ch"><input type="checkbox" id="ajDoble" ${Ajustes.doble?"checked":""}> Doble oído: Google y el teléfono a la vez</label>
     <p class="ayuda" style="margin:-4px 0 4px">${Mic.segundo ? "Ahora: Google entendió " + Mic.textosG + " veces y el teléfono " + Local.textos + "." : "Escuchan los dos y la app se guía por el que primero acierte. Si tu teléfono no lo permite, vuelve solo a Google y te avisa."}</p>
+    <div class="fila"><button data-r="inf">Copiar informe del micrófono</button></div>
     <div class="fila"><button data-r="comp">Compartir esta canción</button><button data-r="ok" class="pri">Listo</button></div>
     <div class="firma" style="padding:4px 0 0">Atril de letras · creado por <b>Ezequiel de Luis</b></div>`;
   modal(html(), async r=>{
     if (r==="comp"){ compartirCancion(cancion); return; }
+    if (r==="inf"){
+      const t = RegMic.texto();
+      try{ await navigator.clipboard.writeText(t); avisoLocal("Informe copiado: pegalo en el chat con Claude."); }
+      catch(e){ if (navigator.share) navigator.share({title:"Informe del micrófono", text:t}).catch(()=>{}); }
+      setTimeout(()=>{ if ($("#avisoLocal").textContent.startsWith("Informe")) avisoLocal(""); }, 6000);
+      return;
+    }
     if (r==="+1" || r==="-1"){
       cancion.tono = (((semis() + (+r)) % 12) + 18) % 12 - 6; // queda entre -6 y +5
       $("#ajTono").textContent = etiquetaTono() || "Original"; pintar(true);
