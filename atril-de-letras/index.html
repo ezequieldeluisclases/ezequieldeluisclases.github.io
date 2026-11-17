@@ -296,7 +296,8 @@ const ANG = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
 const LAT = ["Do","Do#","Re","Re#","Mi","Fa","Fa#","Sol","Sol#","La","La#","Si"];
 const IDX = {C:0,D:2,E:4,F:5,G:7,A:9,B:11,Do:0,Re:2,Mi:4,Fa:5,Sol:7,La:9,Si:11};
 const LATM = LAT.map(x=>x.toUpperCase());
-const RAIZ = "(SOL|DO|RE|MI|FA|LA|SI|Sol|Do|Re|Mi|Fa|La|Si|[A-G])([#b]?)";
+// Cifra Club en notación latina escribe con tilde: Lá, Ré, Dó, Mí, Fá, Sí.
+const RAIZ = "(SOL|DO|RE|MI|FA|LA|SI|Sol|Do|Re|Mi|Fa|La|Si|DÓ|RÉ|MÍ|FÁ|LÁ|SÍ|SÓL|Dó|Ré|Mí|Fá|Lá|Sí|Sól|[A-G])([#b]?)";
 const MOD = "(?:sus[24]?|add\\d+|maj\\d*|dim\\d*|aug|[#b+\\-]?\\d+|\\/\\d+|M\\d*|\\+|-|º|°|ø)";
 const SUF = "((?:maj7?|M7?|min|mi|m|dim|aug|º|°|\\+)?" + MOD + "*(?:\\([^)]*\\))?" + MOD + "*)";
 const RE_AC = new RegExp("^" + RAIZ + SUF + "(?:\\/" + RAIZ + ")?$");
@@ -310,6 +311,7 @@ function nucleo(tok){
 }
 function esAcorde(tok){ const [,c] = nucleo(tok); return c.length>0 && RE_AC.test(c); }
 function nota(r, alt, n){
+  r = r.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const lat = r.length > 1, may = lat && r === r.toUpperCase();
   const k = lat ? r[0] + r.slice(1).toLowerCase() : r;
   let i = IDX[k] + (alt==="#"?1:alt==="b"?-1:0) + n;
@@ -353,7 +355,9 @@ function parsear(texto){
     .replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, "")
     .replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ")
     .replace(/\t/g, "    ").replace(/♯/g, "#").replace(/♭/g, "b");
-  const bloques = limpio.split(/\n[ \t]*\n+/);
+  // Encabezado que trae la página de Cifra Club al copiarla entera: "Volver en guitarraRoberto GalarzaComposición de: …"
+  const sinCabeza = limpio.replace(/^\s*[^\n]{0,160}Composici[oó]n de:[^\n]*\n/i, "");
+  const bloques = sinCabeza.split(/\n[ \t]*\n+/);
   let crudos = [];
   for (const b of bloques){
     const ls_ = b.split("\n").map(l=>l.replace(/\s+$/,"")).filter(l=>l.trim());
