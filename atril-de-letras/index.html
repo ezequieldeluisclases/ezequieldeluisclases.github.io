@@ -134,6 +134,11 @@
     </div>
     <div id="canciones"></div>
     <div class="aviso" id="avisoGuardado"></div>
+    <div class="buscar" id="cuenta">
+      <div class="rot">Teléfono y compu sincronizados</div>
+      <p class="ayuda" id="cuentaTxt">Entrá con tu cuenta de Google en el teléfono y en la compu: las canciones quedan iguales en los dos. Lo que cargues, cambies o borres en uno aparece solo en el otro.</p>
+      <div class="fila"><button class="pri" id="btnEntrar">Entrar con Google</button><button id="btnSalir" style="display:none">Salir de la cuenta</button></div>
+    </div>
     <div class="buscar" id="repertorio">
       <div class="rot">Repertorio para cargar</div>
       <p class="ayuda">Canciones de tu repertorio que todavía no están en el Atril. Tocá una: se abre con el título listo y el botón para buscar la letra con acordes en Cifra Club.</p>
@@ -424,17 +429,164 @@ const Store = {
     this.songs.sort((a,b)=>(a.orden||0)-(b.orden||0));
   },
   async guardar(s){
+    s.mod = Date.now();
     const i = this.songs.findIndex(x=>x.id===s.id);
     if (i>=0) this.songs[i]=s; else this.songs.push(s);
     ls.set("atril.canciones", this.songs);
+    if (Nube.anotar(s.id, "g")) return;
     if (this.col){ try{ await this.col.doc(s.id).set(s); }catch(e){ avisar("No se pudo guardar en la nube; quedó guardada en este teléfono."); } }
   },
   async borrar(id){
     this.songs = this.songs.filter(x=>x.id!==id); ls.set("atril.canciones", this.songs);
+    if (Nube.anotar(id, "b")) return;
     if (this.col){ try{ await this.col.doc(id).delete(); }catch(e){} }
   }
 };
 function avisar(t){ $("#avisoGuardado").textContent = t; }
+
+/* ---------- cuenta de Google: mismas canciones en el teléfono y en la compu ---------- */
+const FB_V = "13.4.0";
+const FB_CONF = {
+  apiKey: "AIzaSyBlZ1EMf9MmuqmcTQYIypi9EyC55l8amZY",
+  authDomain: "atril-de-letras.firebaseapp.com",
+  projectId: "atril-de-letras",
+  storageBucket: "atril-de-letras.firebasestorage.app",
+  messagingSenderId: "320673429486",
+  appId: "1:320673429486:web:e597c17b4d4c5dc10d80ff"
+};
+const Nube = {
+  fb:null, user:null, col:null, unsub:null, listo:false, escuchando:false,
+  // Solo baja el código de Google si ya entró alguna vez (o cuando toca "Entrar"): la app sigue liviana.
+  async cargar(){
+    if (this.fb) return this.fb;
+    const base = "https://www.gstatic.com/firebasejs/" + FB_V + "/";
+    const [app, auth, fs] = await Promise.all([import(base+"firebase-app.js"), import(base+"firebase-auth.js"), import(base+"firebase-firestore.js")]);
+    const a = app.initializeApp(FB_CONF);
+    let db;
+    try{ db = fs.initializeFirestore(a, {localCache: fs.persistentLocalCache({tabManager: fs.persistentMultipleTabManager()})}); }
+    catch(e){ db = fs.getFirestore(a); }
+    this.fb = {auth, fs, au: auth.getAuth(a), db};
+    return this.fb;
+  },
+  escuchar(f){
+    if (this.escuchando) return; this.escuchando = true;
+    f.auth.onAuthStateChanged(f.au, u=>this.cambioUsuario(u));
+  },
+  async iniciar(){
+    if (window.claude && claude.use) { $("#cuenta").style.display = "none"; return; }
+    pintarCuenta();
+    if (!ls.get("atril.nube", false)) return;
+    try{
+      const f = await this.cargar(); this.escuchar(f);
+      try{ await f.auth.getRedirectResult(f.au); }catch(e){ this.error(e); }
+    }catch(e){ pintarCuenta("Sin conexión: por ahora las canciones quedan en este aparato y se sincronizan cuando vuelva internet."); }
+  },
+  async entrar(){
+    pintarCuenta("Abriendo Google…");
+    let f;
+    try{ f = await this.cargar(); }catch(e){ pintarCuenta("No hay conexión a internet. Probá de nuevo cuando tengas señal."); return; }
+    this.escuchar(f);
+    const prov = new f.auth.GoogleAuthProvider();
+    prov.setCustomParameters({prompt: "select_account"});
+    try{ await f.auth.signInWithPopup(f.au, prov); }
+    catch(e){
+      const c = (e && e.code) || "";
+      if (/popup-blocked|operation-not-supported|web-storage-unsupported/.test(c)){
+        try{ await f.auth.signInWithRedirect(f.au, prov); return; }catch(e2){ this.error(e2); return; }
+      }
+      if (/popup-closed|cancelled-popup/.test(c)){ pintarCuenta(); return; }
+      this.error(e);
+    }
+  },
+  async salir(){
+    if (!this.fb) return;
+    ls.set("atril.nube", false);
+    try{ await this.fb.auth.signOut(this.fb.au); }catch(e){}
+  },
+  error(e){
+    const c = (e && e.code) || "";
+    let t = "No se pudo entrar con Google (" + (c || (e && e.message) || "error") + ").";
+    if (/network/.test(c)) t = "No hay conexión a internet. Probá de nuevo cuando tengas señal.";
+    if (/unauthorized-domain/.test(c)) t = "Esta dirección todavía no está habilitada para entrar con Google.";
+    pintarCuenta(t);
+  },
+  // Cambios hechos sin conexión con la cuenta, o antes de que cargue: se anotan y se suben después.
+  anotar(id, que){
+    if (this.col){
+      const s = Store.songs.find(x=>x.id===id);
+      if (que === "b" || !s) this.subir({id, borrado:true, mod:Date.now()});
+      else this.subir(s);
+      return true;
+    }
+    if (ls.get("atril.nube", false)){ const p = ls.get("atril.pendientes", {}); p[id] = que; ls.set("atril.pendientes", p); return true; }
+    return false;
+  },
+  subir(s){
+    const d = JSON.parse(JSON.stringify(s)); delete d.id;
+    // No se espera la respuesta: sin señal queda en cola y Google la sube sola al volver internet.
+    this.fb.fs.setDoc(this.fb.fs.doc(this.col, s.id), d).catch(e=>{ pintarCuenta("No se pudo guardar en tu cuenta (" + ((e&&e.code)||"error") + "). Quedó en este aparato."); });
+  },
+  cambioUsuario(u){
+    if (this.unsub){ this.unsub(); this.unsub = null; }
+    this.user = u; this.col = null; this.listo = false;
+    if (!u){ Store.modo = "local"; pintarCuenta(); if ($("#lista").classList.contains("on")) pintarLista(); return; }
+    ls.set("atril.nube", true);
+    const f = this.fb;
+    const col = f.fs.collection(f.db, "usuarios", u.uid, "canciones");
+    pintarCuenta("Sincronizando…");
+    this.unsub = f.fs.onSnapshot(col, {includeMetadataChanges:true}, snap=>this.recibir(snap, col, u), e=>{
+      pintarCuenta("No se pudo leer tu cuenta (" + ((e&&e.code)||"error") + "). Las canciones siguen en este aparato.");
+    });
+  },
+  recibir(snap, col, u){
+    const marca = "atril.subido." + u.uid;
+    if (!this.listo){
+      // La primera vez que entra en este aparato espera la respuesta de internet y suma lo que ya tenía guardado acá.
+      if (!ls.get(marca, false)){
+        if (snap.metadata.fromCache) return;
+        const remotas = snap.docs.map(d=>({...d.data(), id:d.id}));
+        const ids = new Set(remotas.map(s=>s.id));
+        const clave = s=>norm(s.titulo||"").join(" ") + "|" + norm(s.letra||"").join(" ");
+        const claves = new Set(remotas.filter(s=>!s.borrado).map(clave));
+        this.col = col;
+        for (const s of Store.songs){
+          if (ids.has(s.id) || claves.has(clave(s))) continue;
+          if (!s.mod) s.mod = Date.now();
+          this.subir(s); claves.add(clave(s));
+        }
+        ls.set(marca, true); ls.set("atril.pendientes", {});
+      } else {
+        this.col = col;
+        const p = ls.get("atril.pendientes", {});
+        for (const id in p) this.anotar(id, p[id]);
+        ls.set("atril.pendientes", {});
+      }
+      this.listo = true;
+    }
+    const nuevas = snap.docs.map(d=>({...d.data(), id:d.id})).filter(s=>!s.borrado);
+    // La canción abierta en el escenario sigue siendo la misma (no se corta lo que está cantando).
+    if (cancion){
+      const j = nuevas.findIndex(s=>s.id===cancion.id);
+      if (j >= 0){ Object.assign(cancion, nuevas[j]); nuevas[j] = cancion; }
+    }
+    Store.songs = nuevas; Store.modo = "nube";
+    ls.set("atril.canciones", Store.songs);
+    ordenarCanciones();
+    if (cancion){ const k = Store.songs.indexOf(cancion); if (k >= 0) cancionIdx = k; }
+    pintarCuenta(snap.metadata.fromCache && !navigator.onLine ? "Sin conexión: los cambios se suben solos cuando vuelva internet." : "");
+    if ($("#lista").classList.contains("on")) pintarLista();
+  }
+};
+function pintarCuenta(msg){
+  const u = Nube.user;
+  $("#btnEntrar").style.display = u ? "none" : "";
+  $("#btnSalir").style.display = u ? "" : "none";
+  $("#cuentaTxt").textContent = msg || (u
+    ? "Entraste como " + (u.email || u.displayName || "tu cuenta") + ". Las canciones son las mismas en todos los aparatos donde entres con esta cuenta."
+    : "Entrá con tu cuenta de Google en el teléfono y en la compu: las canciones quedan iguales en los dos. Lo que cargues, cambies o borres en uno aparece solo en el otro.");
+}
+$("#btnEntrar").onclick = ()=>Nube.entrar();
+$("#btnSalir").onclick = ()=>Nube.salir();
 
 /* ---------- vistas ---------- */
 function mostrar(id){ document.querySelectorAll(".vista").forEach(v=>v.classList.toggle("on", v.id===id)); }
@@ -1859,7 +2011,7 @@ async function recibirCancion(){
 
 /* ---------- arranque ---------- */
 pintarLista();
-Store.init().then(()=>{ pintarLista(); recibirCompartido(); recibirCancion(); });
+Store.init().then(()=>{ pintarLista(); recibirCompartido(); recibirCancion(); Nube.iniciar(); });
 Mic.preparar();
 })();
 </script>
