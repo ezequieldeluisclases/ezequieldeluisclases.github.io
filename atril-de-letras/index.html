@@ -180,6 +180,7 @@
     </div>
     <button id="btnPegar" style="display:none">Pegar lo que copié</button>
     <button id="btnArchivo">Cargar desde un archivo (Word, PDF o texto)</button>
+    <button id="btnDocs">Traer de Google Docs</button>
     <input type="file" id="inArchivo" accept=".docx,.pdf,.txt,.odt,.text,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.google-apps.document" style="display:none">
     <p class="ayuda" id="avisoArchivo" style="display:none"></p>
     <textarea id="inLetra" placeholder="Pegá acá la letra o la cifra.&#10;&#10;Dejá una línea en blanco entre estrofa y estrofa."></textarea>
@@ -700,6 +701,7 @@ function abrirEditor(s){
   $("#edBorrar").style.display = s ? "" : "none";
   $("#avisoArchivo").style.display = "none";
   actualizarBusqueda(); mostrar("editor");
+  Docs.preparar();
 }
 async function guardarEditor(){
   const titulo = $("#inTitulo").value.trim() || "Sin título";
@@ -996,6 +998,73 @@ function aTitulo(t){
   return t.toLowerCase().split(/\s+/).map((w,i)=> i>0 && chicas.includes(w) ? w : w.charAt(0).toUpperCase()+w.slice(1)).join(" ");
 }
 $("#btnArchivo").onclick = ()=>$("#inArchivo").click();
+
+/* ---------- traer la letra de un documento de Google Docs ---------- */
+// El teléfono no deja elegir los documentos de Docs como archivo: acá se eligen con el selector de Google
+// y se trae el texto. Solo ve los documentos que él elige (permiso drive.file).
+const Docs = {
+  CLIENTE: "320673429486-kks4ta58mig0d9j6gp4kmfi7ikvchcrj.apps.googleusercontent.com",
+  CLAVE: FB_CONF.apiKey, PROYECTO: "320673429486",
+  listo:false, cargando:null, token:null, vence:0, cliente:null,
+  script(src){ return new Promise((ok, mal)=>{ const s = document.createElement("script"); s.src = src; s.async = true; s.onload = ok; s.onerror = mal; document.head.appendChild(s); }); },
+  preparar(){
+    if (window.claude && claude.use) return Promise.reject();
+    if (!this.cargando){
+      this.cargando = Promise.all([this.script("https://accounts.google.com/gsi/client"), this.script("https://apis.google.com/js/api.js")])
+        .then(()=>new Promise(ok=>gapi.load("picker", ok)))
+        .then(()=>{ this.listo = true; })
+        .catch(e=>{ this.cargando = null; throw e; });
+      this.cargando.catch(()=>{});
+    }
+    return this.cargando;
+  },
+  aviso(t){ const a = $("#avisoArchivo"); a.style.display = ""; a.textContent = t; },
+  // Tiene que llamarse directo desde el toque del botón, si no el teléfono bloquea la ventana de Google.
+  abrir(){
+    if (!this.listo){
+      this.aviso("Preparando Google Docs…");
+      this.preparar().then(()=>this.aviso("Listo. Tocá de nuevo «Traer de Google Docs»."))
+        .catch(()=>this.aviso("Para traer de Google Docs hace falta conexión a internet."));
+      return;
+    }
+    if (this.token && Date.now() < this.vence){ this.selector(); return; }
+    if (!this.cliente){
+      this.cliente = google.accounts.oauth2.initTokenClient({
+        client_id: this.CLIENTE, scope: "https://www.googleapis.com/auth/drive.file",
+        callback: r=>{
+          if (r && r.access_token){ this.token = r.access_token; this.vence = Date.now() + ((+r.expires_in||3600) - 120) * 1000; this.selector(); }
+          else this.aviso("Google no dio permiso (" + ((r && r.error) || "cancelado") + ").");
+        },
+        error_callback: e=>this.aviso(e && e.type === "popup_closed" ? "" : "No se pudo abrir Google (" + ((e && e.type) || "error") + ")."),
+      });
+    }
+    const u = Nube.user;
+    this.cliente.requestAccessToken(u && u.email ? {login_hint: u.email} : {});
+  },
+  selector(){
+    const P = google.picker;
+    const vista = new P.DocsView(P.ViewId.DOCUMENTS).setMode(P.DocsViewMode.LIST).setIncludeFolders(false);
+    const ancho = Math.min(window.innerWidth - 10, 1000), alto = Math.min(window.innerHeight - 10, 700);
+    new P.PickerBuilder()
+      .addView(vista).setOAuthToken(this.token).setDeveloperKey(this.CLAVE).setAppId(this.PROYECTO)
+      .setLocale("es").setTitle("Elegí la canción").setSize(ancho, alto)
+      .setCallback(d=>{ if (d[P.Response.ACTION] === P.Action.PICKED) this.traer(d[P.Response.DOCUMENTS][0]); })
+      .build().setVisible(true);
+  },
+  async traer(doc){
+    const nombre = doc[google.picker.Document.NAME] || "Sin título", id = doc[google.picker.Document.ID];
+    this.aviso("Trayendo «" + nombre + "»…");
+    try{
+      const r = await fetch("https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "/export?mimeType=text/plain", {headers: {Authorization: "Bearer " + this.token}});
+      if (r.status === 401){ this.token = null; this.aviso("Se venció el permiso de Google. Tocá de nuevo «Traer de Google Docs»."); return; }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const t = (await r.text()).replace(/^\uFEFF/, "");
+      await cargarArchivo(new File([t], nombre + ".txt", {type: "text/plain"}));
+    }catch(e){ this.aviso("No pude traer ese documento (" + e.message + "). Probá copiar y pegar la letra."); }
+  }
+};
+$("#btnDocs").onclick = ()=>Docs.abrir();
+if (window.claude && claude.use) $("#btnDocs").style.display = "none";
 $("#inArchivo").onchange = async e=>{
   const f = e.target.files[0]; if (!f) return;
   await cargarArchivo(f);
