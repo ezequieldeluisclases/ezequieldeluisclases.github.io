@@ -180,7 +180,7 @@
     </div>
     <button id="btnPegar" style="display:none">Pegar lo que copié</button>
     <button id="btnArchivo">Cargar desde un archivo (Word, PDF o texto)</button>
-    <input type="file" id="inArchivo" accept=".docx,.pdf,.txt,.odt,.text,.md" style="display:none">
+    <input type="file" id="inArchivo" accept=".docx,.pdf,.txt,.odt,.text,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,application/vnd.google-apps.document" style="display:none">
     <p class="ayuda" id="avisoArchivo" style="display:none"></p>
     <textarea id="inLetra" placeholder="Pegá acá la letra o la cifra.&#10;&#10;Dejá una línea en blanco entre estrofa y estrofa."></textarea>
     <p class="ayuda">Si el estribillo se repite, conviene que esté escrito cada vez que se canta, así la app sabe por dónde vas.</p>
@@ -953,6 +953,23 @@ async function textoDePdf(buf){
 }
 async function leerArchivo(file){
   const nombre = file.name.toLowerCase();
+  // Los documentos de Google Docs llegan sin terminación (.docx, .pdf): se mira qué hay adentro.
+  if (!/\.(docx|odt|pdf|txt|text|md)$/.test(nombre)){
+    const buf = await file.arrayBuffer(), b = new Uint8Array(buf.slice(0, 5));
+    const cab = String.fromCharCode(...b);
+    if (cab.startsWith("%PDF")) return await textoDePdf(buf);
+    if (cab.startsWith("PK")){
+      try{ const xml = await zipLeer(buf, "word/document.xml"); return textoDeXml(xml, "w:p", "w:t", "w:tab", ["w:br","w:cr"]); }
+      catch(e){ const xml = await zipLeer(buf, "content.xml"); return textoDeXml(xml, "text:p", "#texto", "text:tab", ["text:line-break"], "text:s").replace(/#texto/g,""); }
+    }
+    let t = new TextDecoder("utf-8").decode(buf);
+    if (/^\s*</.test(t) && /<(html|body|p|div)[\s>]/i.test(t)){
+      const d = new DOMParser().parseFromString(t.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|h\d|li)>/gi, "$&\n"), "text/html");
+      t = d.body ? d.body.textContent : t;
+    }
+    if (/\u0000/.test(t)) throw new Error("binario");
+    return t;
+  }
   if (nombre.endsWith(".docx")){
     const xml = await zipLeer(await file.arrayBuffer(), "word/document.xml");
     return textoDeXml(xml, "w:p", "w:t", "w:tab", ["w:br","w:cr"]);
