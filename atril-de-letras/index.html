@@ -1386,7 +1386,7 @@ const Oido = {
   elegir(alts){
     if (alts.length < 2 || !versos.length) return alts[0] || "";
     const cerca = [];
-    for (let g = Math.max(0, actual-1); g <= Math.min(versos.length-1, actual+5); g++) cerca.push(...versos[g].clave);
+    for (let g = Math.max(0, actual-1); g <= Math.min(versos.length-1, actual+12); g++) cerca.push(...versos[g].clave);
     for (let g = 0; g < Math.min(2, versos.length); g++) cerca.push(...versos[g].clave);
     let mejor = alts[0], mp = -1;
     alts.forEach((t, i)=>{
@@ -1439,13 +1439,16 @@ const Oido = {
   // Dos palabras seguidas (en orden) de un verso que viene: es la señal más segura de por dónde va.
   // Busca en los 6 versos siguientes y se queda con el más cercano. Si esas dos palabras
   // también están en el verso que se está cantando, no cuenta (es una frase que se repite).
-  parDe(pal, cola){
+  parDe(pal, cola){ const r = this.parEn(pal, cola); return r ? r.par : ""; },
+  // Igual que parDe, pero dice también dónde terminó (la última vez) lo oído.
+  parEn(pal, cola){
+    let r = null;
     for (let i=0;i+1<pal.length;i++){
       const a=pal[i], b=pal[i+1];
       if (a.length+b.length < 6 || (a.length < 3 && b.length < 3)) continue;
-      for (let j=0;j+1<cola.length;j++) if (sim(a,cola[j])>=.8 && sim(b,cola[j+1])>=.8) return a+" "+b;
+      for (let j=0;j+1<cola.length;j++) if (sim(a,cola[j])>=.8 && sim(b,cola[j+1])>=.8 && (!r || j+1 > r.fin)) r = {par: a+" "+b, fin: j+1};
     }
-    return "";
+    return r;
   },
   porPares(cola){
     cola = cola.slice(-8); if (cola.length < 2) return -1;
@@ -1459,6 +1462,18 @@ const Oido = {
       const par = this.parDe(versos[g].pal, cola); if (!par) continue;
       if (cur){ const [a,b] = par.split(" "); if (this.parDe(cur.pal, [a,b])) continue; }
       return g;
+    }
+    // Se quedó atrás (no entendió una estrofa entera, o la cantó salteada): busca más abajo,
+    // hasta unas tres estrofas, pero pidiendo dos pares seguidos de dos versos consecutivos.
+    // Así un estribillo que se repite no lo hace saltar por una sola frase.
+    if (!alFinal){
+      cola = this.colaLarga || cola;
+      for (let g = actual + 7; g < Math.min(versos.length, actual + 18); g++){
+        const a = this.parEn(versos[g-1].pal, cola), b = this.parEn(versos[g].pal, cola);
+        if (a && b && b.fin > a.fin && a.par !== b.par) return g;
+        const c = g+1 < versos.length ? this.parEn(versos[g+1].pal, cola) : null;
+        if (b && c && c.fin > b.fin && b.par !== c.par) return g+1;
+      }
     }
     return -1;
   },
@@ -1510,6 +1525,7 @@ const Oido = {
       else if (parecidos && !pasoDeLargo) cola = [];
       else if (parecidos) cola = cola.slice(cur.clave.length);
     }
+    this.colaLarga = cola.slice(-16);
     cola = cola.slice(-14);
     let mejor=-1, mp=0;
     if (cola.length >= nivel.minInicio){
