@@ -45,6 +45,14 @@
   .ordenFila button{padding:6px 12px;font-size:13px;border-radius:999px}
   .ordenFila button.sel{background:var(--acc,#e0a040);color:#1a1208;border-color:transparent;font-weight:600}
   .vacio{color:var(--dim);text-align:center;padding:40px 10px;line-height:1.5}
+  /* Buscador de canciones */
+  .buscador{position:relative;margin:0 0 10px}
+  .buscador input{padding-left:44px;padding-right:44px;font-size:17px}
+  .buscador .lupa{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:20px;height:20px;opacity:.7;pointer-events:none}
+  .buscador button{position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:6px 11px;border-radius:10px;font-size:15px;display:none}
+  .buscador.con button{display:block}
+  .buscador input::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
+  #btnEditarAqui{font-size:18px;padding:8px 12px}
   /* Carpetas (repertorios para cada presentación) */
   .carpetas{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;margin:0 0 4px;-webkit-overflow-scrolling:touch}
   .carpetas button{flex:0 0 auto;padding:7px 14px;font-size:14px;border-radius:999px;white-space:nowrap}
@@ -144,6 +152,11 @@
       <div><b>Instalala como aplicación</b><br><span id="instalarTxt">Así se abre sola, a pantalla completa, sin la barra de Chrome.</span></div>
       <button class="pri" id="btnInstalar">Instalar</button>
     </div>
+    <div class="buscador" id="buscador">
+      <svg class="lupa" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+      <input id="inBuscar" type="search" placeholder="Buscar canción, artista o una frase" autocomplete="off" enterkeyhint="search">
+      <button id="btnLimpiarBusq" aria-label="Borrar búsqueda">✕</button>
+    </div>
     <div class="carpetas" id="carpetasFila"></div>
     <div class="barraCarpeta" id="barraCarpeta">
       <div class="nom" id="nomCarpeta"></div>
@@ -226,6 +239,7 @@
     <div class="tit" id="esTitulo" title="Ajustes"></div>
     <button id="btnMenos" aria-label="Letra más chica">A−</button>
     <button id="btnMas" aria-label="Letra más grande">A+</button>
+    <button id="btnEditarAqui" aria-label="Editar esta canción" title="Editar esta canción">✎</button>
     <button id="btnMic">Escuchar</button>
   </header>
   <div id="estrofaInfo"><span class="izq"><span id="infoEstrofa"></span><button id="btnNivel" title="Sensibilidad del oído">Oído: Normal</button></span><span class="tonos-barra" id="tonoBarra"><button id="tonoMenos" aria-label="Bajar medio tono">−½</button><span class="tono" id="infoTono"></span><button id="tonoMas" aria-label="Subir medio tono">+½</button></span></div>
@@ -739,8 +753,19 @@ function pintarLista(){
   ordenarCanciones();
   pintarCarpetas();
   const enCarpeta = !!carpetaSel;
-  const lista = enCarpeta ? cancionesDe(carpetaSel) : Store.songs;
-  vistaIds = lista.map(s=>s.id);
+  const completa = enCarpeta ? cancionesDe(carpetaSel) : Store.songs;
+  // "La próxima canción" sigue la carpeta o la lista completa, aunque se esté buscando.
+  vistaIds = completa.map(s=>s.id);
+  const q = sinTildes($("#inBuscar").value);
+  $("#buscador").classList.toggle("con", !!q);
+  $("#buscador").style.display = Store.songs.length ? "" : "none";
+  let lista = completa;
+  if (q){
+    // Busca por título y artista; con 4 letras o más, también por una frase de la letra.
+    const enTit = s=>sinTildes((s.titulo||"") + " " + (s.artista||"")).includes(q);
+    const enLetra = s=>q.length >= 4 && sinTildes(s.letra||"").includes(q);
+    lista = completa.filter(s=>enTit(s)).concat(completa.filter(s=>!enTit(s) && enLetra(s)));
+  }
   $("#ordenFila").classList.toggle("on", !enCarpeta && Store.songs.length >= 2);
   $("#ordAZ").classList.toggle("sel", ordenLista === "az");
   $("#ordMio").classList.toggle("sel", ordenLista === "mio");
@@ -748,6 +773,8 @@ function pintarLista(){
   try{ pintarRepertorio(); }catch(e){}
   if (!Store.songs.length){
     box.innerHTML = '<div class="vacio">Todavía no hay canciones.<br>Tocá <b>+ Canción</b>, buscala en Cifra Club o pegá la letra, y listo.</div>';
+  } else if (q && !lista.length){
+    box.innerHTML = '<div class="vacio">No encontré ninguna canción con «' + esc($("#inBuscar").value.trim()) + '»' + (enCarpeta ? ' en esta carpeta.<br>Tocá <b>Todas</b> para buscar en todas.' : '.') + '</div>';
   } else if (enCarpeta && !lista.length){
     box.innerHTML = '<div class="vacio">Esta carpeta está vacía.<br>Tocá <b>Agregar o quitar canciones</b> para elegir las que vas a tocar.</div>';
   } else {
@@ -755,9 +782,9 @@ function pintarLista(){
       const p = parsear(s.letra), n = p.estrofas.length;
       const conAc = p.estrofas.some(e=>e.some(x=>x.tipo==="acordes" || (x.acordes && x.acordes.length)));
       const det = [s.artista, `${n} estrofa${n===1?"":"s"}`, conAc ? "con acordes" : ""].filter(Boolean).join(" · ");
-      const flechas = enCarpeta || ordenLista === "mio";
+      const flechas = !q && (enCarpeta || ordenLista === "mio");
       return `<div class="cancion" data-id="${s.id}">
-        <div class="t">${enCarpeta ? `<span class="num">${i+1}.</span>` : ""}${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
+        <div class="t">${enCarpeta && !q ? `<span class="num">${i+1}.</span>` : ""}${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
         ${flechas ? '<button data-acc="sub" aria-label="Subir">↑</button><button data-acc="baj" aria-label="Bajar">↓</button>' : ''}
         ${enCarpeta ? '<button data-acc="quitar">Quitar</button>' : '<button data-acc="comp" aria-label="Compartir por WhatsApp">Compartir</button>'}
         <button data-acc="edit">Editar</button>
@@ -766,13 +793,16 @@ function pintarLista(){
   }
   avisar(Store.modo==="nube" ? "Tus canciones se guardan en tu cuenta." : "Tus canciones se guardan en este teléfono.");
 }
+$("#inBuscar").addEventListener("input", ()=>pintarLista());
+$("#inBuscar").addEventListener("keydown", e=>{ if (e.key === "Enter") e.target.blur(); });
+$("#btnLimpiarBusq").onclick = ()=>{ $("#inBuscar").value = ""; pintarLista(); $("#inBuscar").focus(); };
 $("#ordAZ").onclick = ()=>cambiarOrden("az");
 $("#ordMio").onclick = ()=>cambiarOrden("mio");
 $("#canciones").addEventListener("click", async e=>{
   const b = e.target.closest("button"); if (!b) return;
   const id = b.closest(".cancion").dataset.id;
   const idx = Store.songs.findIndex(s=>s.id===id);
-  if (b.dataset.acc==="edit") abrirEditor(Store.songs[idx]);
+  if (b.dataset.acc==="edit"){ desdeEscena = null; abrirEditor(Store.songs[idx]); }
   if (b.dataset.acc==="comp") compartirCancion(Store.songs[idx]);
   if (b.dataset.acc==="tocar") abrirEscena(idx);
   if (carpetaSel){
@@ -874,14 +904,31 @@ async function guardarEditor(){
   const s = editando ? {...editando, titulo, artista, letra} : {id:uid(), titulo, artista, letra, tono:0, orden: Store.songs.reduce((m,x)=>Math.max(m, x.orden||0), -1) + 1};
   await Store.guardar(s); return s;
 }
-$("#btnNueva").onclick = ()=>abrirEditor(null);
-$("#edVolver").onclick = ()=>{ pintarLista(); mostrar("lista"); };
-$("#edGuardar").onclick = async ()=>{ if (await guardarEditor()){ pintarLista(); mostrar("lista"); } };
-$("#edEnsayar").onclick = async ()=>{ const s = await guardarEditor(); if (s){ pintarLista(); abrirEscena(Store.songs.findIndex(x=>x.id===s.id)); } };
+$("#btnNueva").onclick = ()=>{ desdeEscena = null; abrirEditor(null); };
+// Editar sin salir de la canción: se pausa el micrófono y, al volver, sigue en el mismo lugar.
+let desdeEscena = null;
+$("#btnEditarAqui").onclick = e=>{
+  e.stopPropagation(); if (!cancion) return;
+  desdeEscena = {id: cancion.id, actual, mic: Mic.quiere};
+  if (Mic.quiere) Mic.parar();
+  try{ wake && wake.release(); }catch(err){}
+  abrirEditor(cancion);
+};
+function volverAEscena(){
+  const d = desdeEscena; desdeEscena = null;
+  const idx = Store.songs.findIndex(x=>x.id === d.id);
+  if (idx < 0){ pintarLista(); mostrar("lista"); return; }
+  abrirEscena(idx);
+  actual = Math.min(d.actual, versos.length - 1); pintar(true);
+  if (d.mic) Mic.arrancar();
+}
+$("#edVolver").onclick = ()=>{ if (desdeEscena) volverAEscena(); else { pintarLista(); mostrar("lista"); } };
+$("#edGuardar").onclick = async ()=>{ if (await guardarEditor()){ if (desdeEscena) volverAEscena(); else { pintarLista(); mostrar("lista"); } } };
+$("#edEnsayar").onclick = async ()=>{ const s = await guardarEditor(); if (s){ if (desdeEscena){ volverAEscena(); return; } pintarLista(); abrirEscena(Store.songs.findIndex(x=>x.id===s.id)); } };
 $("#edBorrar").onclick = ()=>{
   modal(`<p>¿Borrar <b>${esc(editando.titulo)}</b>? No se puede deshacer.</p>
     <div class="fila"><button data-r="no">Cancelar</button><button class="peligro" data-r="si">Borrar</button></div>`,
-    async r=>{ if (r==="si"){ await Store.borrar(editando.id); pintarLista(); mostrar("lista"); } });
+    async r=>{ if (r==="si"){ desdeEscena = null; await Store.borrar(editando.id); pintarLista(); mostrar("lista"); } });
 };
 function modal(html, cb){
   const m=$("#modal"); $("#modalCaja").innerHTML=html; m.classList.add("on");
