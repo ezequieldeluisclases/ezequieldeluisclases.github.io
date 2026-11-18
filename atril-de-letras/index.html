@@ -1825,7 +1825,8 @@ const Oido = {
     const v = versos[g]; if (!v || !v.clave.length) return g;
     for (let h = Math.max(0, actual + 1); h < g; h++){
       const w = versos[h];
-      if (w.clave.length && Math.abs(w.clave.length - v.clave.length) <= 2 && this.puntaje(w, v.clave) >= .8 && this.puntaje(v, w.clave) >= .8) return h;
+      // Mismo verso (o casi): la mayoría de sus palabras coinciden, aunque una de las dos veces tenga alguna de más.
+      if (w.clave.length && Math.abs(w.clave.length - v.clave.length) <= 3 && (this.puntaje(w, v.clave) >= .75 || this.puntaje(v, w.clave) >= .75)) return h;
     }
     return g;
   },
@@ -1906,8 +1907,12 @@ const Oido = {
           const completo = this.puntaje(v, tail.slice(-(v.clave.length+3)));
           // Para volver atrás (un estribillo escrito una sola vez) hace falta el verso entero, muy claro.
           if (nivel.enOrden && g < actual && !alFinal && (completo < .9 || v.clave.length < 4)) continue;
+          // Hacia adelante y lejos (más de 6 versos): solo con el verso entero bien claro,
+          // nunca por el comienzo solo, y nunca más allá de unas tres estrofas.
+          const lejos = g - actual > 6;
+          if (lejos && (completo < .88 || g - actual > 16)) continue;
           let comienzo = 0;
-          if (v.clave.length >= 4 && n >= 3){
+          if (!lejos && v.clave.length >= 4 && n >= 3){
             const m = Math.min(4, n);
             comienzo = this.puntaje({clave: v.clave.slice(0, m)}, tail.slice(-(m+2))) - .04;
           }
@@ -1916,7 +1921,7 @@ const Oido = {
           const trabado = Date.now() - this.ultMov > 8000 && n >= 5 ? .06 : 0;
           const umbral = (adelante ? nivel.retomar : Math.max(nivel.retomar, .84)) - trabado;
           if (p < umbral || p < ref + .08) continue;
-          const dist = adelante ? (g - actual) * .004 : .03 + (actual - g) * .004;
+          const dist = adelante ? (g - actual) * .012 : .03 + (actual - g) * .004;
           const val = p - dist;
           if (val > mejorVal){ mejorVal = val; elegido = g; }
         }
