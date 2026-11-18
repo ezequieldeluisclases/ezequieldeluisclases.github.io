@@ -45,6 +45,19 @@
   .ordenFila button{padding:6px 12px;font-size:13px;border-radius:999px}
   .ordenFila button.sel{background:var(--acc,#e0a040);color:#1a1208;border-color:transparent;font-weight:600}
   .vacio{color:var(--dim);text-align:center;padding:40px 10px;line-height:1.5}
+  /* Carpetas (repertorios para cada presentación) */
+  .carpetas{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;margin:0 0 4px;-webkit-overflow-scrolling:touch}
+  .carpetas button{flex:0 0 auto;padding:7px 14px;font-size:14px;border-radius:999px;white-space:nowrap}
+  .carpetas button.sel{background:var(--acc);color:#1a1208;border-color:transparent;font-weight:700}
+  .carpetas button.nueva{border-style:dashed;color:var(--dim)}
+  .barraCarpeta{display:none;flex-direction:column;gap:8px;margin:0 0 10px;padding:12px;border:1px solid #4a3c1e;border-radius:14px;background:#1d1910}
+  .barraCarpeta.on{display:flex}
+  .barraCarpeta .nom{font-size:18px;font-weight:700;color:var(--acc)}
+  .barraCarpeta .fila button{padding:8px 12px;font-size:14px}
+  .elegir{max-height:52vh;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin:8px 0}
+  .elegir label{display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:16px}
+  .elegir input{width:22px;height:22px;flex:0 0 auto}
+  .num{color:var(--acc);font-weight:700;margin-right:6px}
   .ayuda{color:var(--dim);font-size:14px;line-height:1.5;margin:0}
   .fila{display:flex;gap:10px;flex-wrap:wrap}
   .fila>*{flex:1}
@@ -130,6 +143,12 @@
     <div id="instalar" class="instalar">
       <div><b>Instalala como aplicación</b><br><span id="instalarTxt">Así se abre sola, a pantalla completa, sin la barra de Chrome.</span></div>
       <button class="pri" id="btnInstalar">Instalar</button>
+    </div>
+    <div class="carpetas" id="carpetasFila"></div>
+    <div class="barraCarpeta" id="barraCarpeta">
+      <div class="nom" id="nomCarpeta"></div>
+      <div class="fila"><button class="pri" id="carElegir">Agregar o quitar canciones</button><button id="carRenombrar">Cambiar nombre</button><button id="carBorrar">Borrar carpeta</button></div>
+      <p class="ayuda">Ordená con las flechas: al terminar una canción, sigue la próxima de esta carpeta. Borrar la carpeta no borra las canciones.</p>
     </div>
     <div class="ordenFila" id="ordenFila">
       <span>Orden:</span>
@@ -621,24 +640,126 @@ async function cambiarOrden(modo){
   }
   ordenLista = modo; ls.set("atril.ordenLista", modo); pintarLista();
 }
+/* ---------- carpetas: repertorios para cada concierto o presentación ---------- */
+// Cada canción guarda en qué carpetas está y en qué lugar: {"Peña del sábado": 2}. Así viajan solas
+// con la canción (y con la cuenta de Google) y una canción puede estar en varias carpetas.
+let carpetaSel = ls.get("atril.carpetaSel", "");
+let vistaIds = [];
+function nombresCarpetas(){
+  const n = new Set(ls.get("atril.carpetasVacias", []));
+  for (const s of Store.songs) for (const k of Object.keys(s.carpetas || {})) n.add(k);
+  return [...n].sort((a,b)=>a.localeCompare(b, "es", {sensitivity:"base", numeric:true}));
+}
+function cancionesDe(nombre){
+  return Store.songs.filter(s=>s.carpetas && nombre in s.carpetas).sort((a,b)=>a.carpetas[nombre]-b.carpetas[nombre]);
+}
+function elegirCarpeta(n){ carpetaSel = n; ls.set("atril.carpetaSel", n); pintarLista(); }
+async function guardarOrdenCarpeta(nombre, lista){
+  for (let i=0;i<lista.length;i++){ const s = lista[i]; if (s.carpetas[nombre] !== i){ s.carpetas = {...s.carpetas, [nombre]: i}; await Store.guardar(s); } }
+}
+function pintarCarpetas(){
+  const nombres = nombresCarpetas();
+  // (Si todavía no cargaron las canciones, no se toca la carpeta elegida.)
+  if (carpetaSel && !nombres.includes(carpetaSel) && Store.songs.length) { carpetaSel = ""; ls.set("atril.carpetaSel", ""); }
+  $("#carpetasFila").innerHTML = (Store.songs.length ? `<button data-c="" class="${carpetaSel ? "" : "sel"}">Todas</button><button class="nueva" data-nueva="1">+ Carpeta</button>` : "") +
+    nombres.map(n=>`<button data-c="${esc(n)}" class="${n === carpetaSel ? "sel" : ""}">${esc(n)} · ${cancionesDe(n).length}</button>`).join("");
+  $("#barraCarpeta").classList.toggle("on", !!carpetaSel);
+  $("#nomCarpeta").textContent = carpetaSel ? "📁 " + carpetaSel : "";
+}
+$("#carpetasFila").addEventListener("click", e=>{
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.nueva) nuevaCarpeta(); else elegirCarpeta(b.dataset.c);
+});
+function nuevaCarpeta(){
+  modal(`<p><b>Nueva carpeta</b></p><p class="ayuda">Por ejemplo: «Peña del sábado» o «Acto del colegio».</p>
+    <input id="inNomCarpeta" placeholder="Nombre de la carpeta" maxlength="60">
+    <div class="fila"><button data-r="no">Cancelar</button><button data-r="si" class="pri">Crear y elegir canciones</button></div>`, r=>{
+    const n = ($("#inNomCarpeta").value || "").trim().replace(/\s+/g, " ");
+    if (r !== "si" || !n) return;
+    const v = ls.get("atril.carpetasVacias", []); if (!v.includes(n)) v.push(n); ls.set("atril.carpetasVacias", v);
+    carpetaSel = n; ls.set("atril.carpetaSel", n); pintarLista(); elegirCanciones(n);
+  });
+  setTimeout(()=>{ try{ $("#inNomCarpeta").focus(); }catch(e){} }, 50);
+}
+function elegirCanciones(nombre){
+  const todas = Store.songs.slice().sort((a,b)=>(a.titulo||"").localeCompare(b.titulo||"", "es", {sensitivity:"base", numeric:true}));
+  modal(`<p><b>Canciones de «${esc(nombre)}»</b></p>
+    <input id="inBuscarCar" placeholder="Buscar canción">
+    <div class="elegir" id="listaElegir">${todas.map(s=>`<label data-t="${esc(sinTildes((s.titulo||"") + " " + (s.artista||"")))}"><input type="checkbox" value="${s.id}" ${s.carpetas && nombre in s.carpetas ? "checked" : ""}> <span>${esc(s.titulo||"Sin título")}${s.artista ? ` <span class="s" style="color:var(--dim);font-size:13px">· ${esc(s.artista)}</span>` : ""}</span></label>`).join("")}</div>
+    <div class="fila"><button data-r="no">Cancelar</button><button data-r="si" class="pri">Listo</button></div>`, async r=>{
+    if (r !== "si") return;
+    const marcadas = new Set([...document.querySelectorAll("#listaElegir input:checked")].map(i=>i.value));
+    const lista = cancionesDe(nombre).filter(s=>marcadas.has(s.id));
+    // Las nuevas van al final, en el orden alfabético en que aparecen.
+    for (const s of todas) if (marcadas.has(s.id) && !lista.includes(s)) lista.push(s);
+    for (const s of Store.songs){
+      if (s.carpetas && nombre in s.carpetas && !marcadas.has(s.id)){ const c = {...s.carpetas}; delete c[nombre]; s.carpetas = c; await Store.guardar(s); }
+    }
+    for (const s of lista) if (!s.carpetas) s.carpetas = {};
+    await guardarOrdenCarpeta(nombre, lista);
+    if (lista.length) ls.set("atril.carpetasVacias", ls.get("atril.carpetasVacias", []).filter(x=>x !== nombre));
+    pintarLista();
+  });
+  $("#inBuscarCar").addEventListener("input", e=>{
+    const q = sinTildes(e.target.value);
+    document.querySelectorAll("#listaElegir label").forEach(l=>{ l.style.display = !q || l.dataset.t.includes(q) ? "" : "none"; });
+  });
+}
+$("#carElegir").onclick = ()=>{ if (carpetaSel) elegirCanciones(carpetaSel); };
+$("#carRenombrar").onclick = ()=>{
+  const viejo = carpetaSel; if (!viejo) return;
+  modal(`<p><b>Cambiar nombre</b></p><input id="inNomCarpeta" maxlength="60" value="${esc(viejo)}">
+    <div class="fila"><button data-r="no">Cancelar</button><button data-r="si" class="pri">Guardar</button></div>`, async r=>{
+    const n = ($("#inNomCarpeta").value || "").trim().replace(/\s+/g, " ");
+    if (r !== "si" || !n || n === viejo) return;
+    for (const s of Store.songs) if (s.carpetas && viejo in s.carpetas){ const c = {...s.carpetas}; c[n] = c[viejo]; delete c[viejo]; s.carpetas = c; await Store.guardar(s); }
+    ls.set("atril.carpetasVacias", ls.get("atril.carpetasVacias", []).map(x=>x === viejo ? n : x));
+    elegirCarpeta(n);
+  });
+};
+$("#carBorrar").onclick = ()=>{
+  const n = carpetaSel; if (!n) return;
+  modal(`<p><b>¿Borrar la carpeta «${esc(n)}»?</b></p><p class="ayuda">Las canciones no se borran: siguen en la lista general.</p>
+    <div class="fila"><button data-r="no">Cancelar</button><button data-r="si" class="peligro">Borrar carpeta</button></div>`, async r=>{
+    if (r !== "si") return;
+    for (const s of Store.songs) if (s.carpetas && n in s.carpetas){ const c = {...s.carpetas}; delete c[n]; s.carpetas = c; await Store.guardar(s); }
+    ls.set("atril.carpetasVacias", ls.get("atril.carpetasVacias", []).filter(x=>x !== n));
+    elegirCarpeta("");
+  });
+};
+// La canción que sigue: la próxima de la carpeta (o de la lista) que se está mirando.
+function proxCancion(){
+  if (!cancion) return null;
+  const i = vistaIds.indexOf(cancion.id);
+  if (i >= 0) return Store.songs.find(s=>s.id === vistaIds[i+1]) || null;
+  return Store.songs[cancionIdx+1] || null;
+}
+
 function pintarLista(){
   ordenarCanciones();
-  $("#ordenFila").classList.toggle("on", Store.songs.length >= 2);
+  pintarCarpetas();
+  const enCarpeta = !!carpetaSel;
+  const lista = enCarpeta ? cancionesDe(carpetaSel) : Store.songs;
+  vistaIds = lista.map(s=>s.id);
+  $("#ordenFila").classList.toggle("on", !enCarpeta && Store.songs.length >= 2);
   $("#ordAZ").classList.toggle("sel", ordenLista === "az");
   $("#ordMio").classList.toggle("sel", ordenLista === "mio");
   const box = $("#canciones");
   try{ pintarRepertorio(); }catch(e){}
   if (!Store.songs.length){
     box.innerHTML = '<div class="vacio">Todavía no hay canciones.<br>Tocá <b>+ Canción</b>, buscala en Cifra Club o pegá la letra, y listo.</div>';
+  } else if (enCarpeta && !lista.length){
+    box.innerHTML = '<div class="vacio">Esta carpeta está vacía.<br>Tocá <b>Agregar o quitar canciones</b> para elegir las que vas a tocar.</div>';
   } else {
-    box.innerHTML = Store.songs.map(s=>{
+    box.innerHTML = lista.map((s, i)=>{
       const p = parsear(s.letra), n = p.estrofas.length;
       const conAc = p.estrofas.some(e=>e.some(x=>x.tipo==="acordes" || (x.acordes && x.acordes.length)));
       const det = [s.artista, `${n} estrofa${n===1?"":"s"}`, conAc ? "con acordes" : ""].filter(Boolean).join(" · ");
+      const flechas = enCarpeta || ordenLista === "mio";
       return `<div class="cancion" data-id="${s.id}">
-        <div class="t">${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
-        ${ordenLista === "mio" ? '<button data-acc="sub" aria-label="Subir">↑</button><button data-acc="baj" aria-label="Bajar">↓</button>' : ''}
-        <button data-acc="comp" aria-label="Compartir por WhatsApp">Compartir</button>
+        <div class="t">${enCarpeta ? `<span class="num">${i+1}.</span>` : ""}${esc(s.titulo||"Sin título")}<span class="s">${esc(det)}</span></div>
+        ${flechas ? '<button data-acc="sub" aria-label="Subir">↑</button><button data-acc="baj" aria-label="Bajar">↓</button>' : ''}
+        ${enCarpeta ? '<button data-acc="quitar">Quitar</button>' : '<button data-acc="comp" aria-label="Compartir por WhatsApp">Compartir</button>'}
         <button data-acc="edit">Editar</button>
         <button class="pri" data-acc="tocar">Cantar</button></div>`;
     }).join("");
@@ -654,6 +775,13 @@ $("#canciones").addEventListener("click", async e=>{
   if (b.dataset.acc==="edit") abrirEditor(Store.songs[idx]);
   if (b.dataset.acc==="comp") compartirCancion(Store.songs[idx]);
   if (b.dataset.acc==="tocar") abrirEscena(idx);
+  if (carpetaSel){
+    const lista = cancionesDe(carpetaSel), k = lista.findIndex(s=>s.id===id);
+    if (b.dataset.acc==="quitar"){ const s = lista[k]; const c = {...s.carpetas}; delete c[carpetaSel]; s.carpetas = c; lista.splice(k, 1); await Store.guardar(s); await guardarOrdenCarpeta(carpetaSel, lista); if (!lista.length){ const v = ls.get("atril.carpetasVacias", []); if (!v.includes(carpetaSel)) v.push(carpetaSel); ls.set("atril.carpetasVacias", v); } pintarLista(); return; }
+    const j = b.dataset.acc==="sub" ? k-1 : b.dataset.acc==="baj" ? k+1 : -1;
+    if (j >= 0 && j < lista.length){ [lista[k], lista[j]] = [lista[j], lista[k]]; await guardarOrdenCarpeta(carpetaSel, lista); pintarLista(); }
+    return;
+  }
   const mover = async (j)=>{
     if (j < 0 || j >= Store.songs.length) return;
     const a = Store.songs[j], c = Store.songs[idx];
@@ -1363,7 +1491,7 @@ function pintar(saltar){
   const ref = versos[fin ? actual : actual+1];
   $("#infoEstrofa").textContent = `Estrofa ${ref.s+1} de ${estrofas.length}`;
   // Abajo solo aparece algo al terminar: la canción que sigue en la lista.
-  const prox = Store.songs[cancionIdx+1];
+  const prox = proxCancion();
   const caja = $("#sigue");
   if (fin){ caja.style.display = ""; $("#sigueRot").textContent = "Fin de la canción"; const tx=$("#sigueTxt"); tx.className="txt"; tx.textContent = prox ? "Próxima: " + prox.titulo : ""; }
   else caja.style.display = "none";
@@ -1390,7 +1518,7 @@ function estrofaAnt(){ if (!versos.length) return; const v=versos[marcado()]; ir
 function estrofaSig(){
   if (!versos.length) return; const si = versos[marcado()].s;
   if (si+1 < estrofas.length){ irA(primeraDe(si+1)); Oido.cortar(); }
-  else if (Store.songs[cancionIdx+1]) abrirEscena(cancionIdx+1);
+  else { const p = proxCancion(); if (p) abrirEscena(Store.songs.indexOf(p)); }
 }
 $("#navAnt").onclick = estrofaAnt;
 $("#navSig").onclick = estrofaSig;
